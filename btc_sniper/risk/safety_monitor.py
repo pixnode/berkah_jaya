@@ -75,7 +75,12 @@ class SafetyMonitor:
     async def run(self) -> None:
         """Main monitoring loop — runs every 0.5 seconds."""
         self._running = True
-        logger.info("SafetyMonitor started — checking every 0.5s.")
+        logger.info("SafetyMonitor starting up — entering %ds grace period...", self._cfg.SAFETY_MONITOR_STARTUP_GRACE_SEC)
+        
+        # Wait for feeds to stabilize before starting monitoring
+        await asyncio.sleep(self._cfg.SAFETY_MONITOR_STARTUP_GRACE_SEC)
+        
+        logger.info("SafetyMonitor active — checking every 0.5s.")
 
         try:
             while self._running:

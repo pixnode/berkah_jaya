@@ -152,6 +152,7 @@ class BotConfig:
     QUEUE_HL_MAXSIZE: int
     CVD_CALC_INTERVAL_MS: int
     MIN_TRADE_SIZE_USD: float
+    SAFETY_MONITOR_STARTUP_GRACE_SEC: int
 
     # ── BLOCKCHAIN ────────────────────────────────────
     POLYGON_GAS_TIP_MULTIPLIER: float
@@ -259,6 +260,7 @@ def load_config(env_path: Optional[str] = None) -> BotConfig:
         QUEUE_HL_MAXSIZE=_env_int("QUEUE_HL_MAXSIZE", 2000),
         CVD_CALC_INTERVAL_MS=_env_int("CVD_CALC_INTERVAL_MS", 500),
         MIN_TRADE_SIZE_USD=_env_float("MIN_TRADE_SIZE_USD", 0.0),
+        SAFETY_MONITOR_STARTUP_GRACE_SEC=_env_int("SAFETY_MONITOR_STARTUP_GRACE_SEC", 30),
         # BLOCKCHAIN
         POLYGON_GAS_TIP_MULTIPLIER=_env_float("POLYGON_GAS_TIP_MULTIPLIER", 1.0),
         CLAIM_RETRY_MAX=_env_int("CLAIM_RETRY_MAX", 3),
