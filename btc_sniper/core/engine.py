@@ -2,7 +2,7 @@
 """BotEngine — main orchestrator. Startup, main loop, shutdown."""
 
 from __future__ import annotations
-import asyncio, json, logging, time
+import asyncio, json, logging, time, os
 from datetime import datetime, timezone
 from typing import Optional, Set
 from config import BotConfig
