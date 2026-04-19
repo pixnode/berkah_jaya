@@ -59,7 +59,7 @@ class BotEngine:
         self._audit_logger = AuditLogger(self._cfg)
         await self._audit_logger.log_event(EventRecord(time.time(),"STARTUP","","engine","","Bot starting",None,"{}"))
 
-        self._queue = asyncio.Queue(maxsize=100)
+        self._queue = asyncio.Queue(maxsize=5000)
         self._hl_feed = HyperliquidFeed(self._cfg, self._audit_logger)
         self._poly_feed = PolymarketFeed(self._cfg, self._audit_logger)
         self._chainlink_feed = ChainlinkFeed(self._cfg, self._audit_logger)

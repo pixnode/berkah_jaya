@@ -70,6 +70,10 @@ class SignalProcessor:
         # Volume tracking for avg_volume_per_min
         self._volume_deque: Deque[tuple[float, float]] = collections.deque()
 
+        # ── Running totals for O(1) performance ──────
+        self._running_cvd: float = 0.0
+        self._running_volume: float = 0.0
+
         # ── Velocity tracking ─────────────────────────
         # Each entry: (timestamp, price)
         self._velocity_deque: Deque[tuple[float, float]] = collections.deque()
@@ -175,31 +179,33 @@ class SignalProcessor:
         # Net delta: positive for buy, negative for sell
         net_delta = event.size if event.side == "buy" else -event.size
         self._cvd_deque.append((now, net_delta))
+        self._running_cvd += net_delta
 
         # Track absolute volume for avg calculation
         self._volume_deque.append((now, event.size))
+        self._running_volume += event.size
 
         # ── Purge expired CVD entries (older than 60s) ──
         cutoff_cvd = now - 60.0
         while self._cvd_deque and self._cvd_deque[0][0] < cutoff_cvd:
-            self._cvd_deque.popleft()
+            old_ts, old_delta = self._cvd_deque.popleft()
+            self._running_cvd -= old_delta
 
         # ── Purge expired volume entries ──
         cutoff_vol = now - (self._cfg.CVD_VOLUME_WINDOW_MINUTES * 60.0)
         while self._volume_deque and self._volume_deque[0][0] < cutoff_vol:
-            self._volume_deque.popleft()
+            old_ts, old_sz = self._volume_deque.popleft()
+            self._running_volume -= old_sz
 
         # ── Calculate CVD (60s rolling) ──
-        cvd_current = sum(entry[1] for entry in self._cvd_deque)
-        self._state.cvd_60s = cvd_current
+        self._state.cvd_60s = self._running_cvd
 
         # ── Calculate avg volume per minute ──
-        total_volume = sum(entry[1] for entry in self._volume_deque)
         window_minutes = self._cfg.CVD_VOLUME_WINDOW_MINUTES
         if self._volume_deque:
             elapsed_minutes = (now - self._volume_deque[0][0]) / 60.0
             effective_minutes = max(min(elapsed_minutes, window_minutes), 1.0)
-            avg_volume_per_min = total_volume / effective_minutes
+            avg_volume_per_min = self._running_volume / effective_minutes
         else:
             avg_volume_per_min = 0.0
 
@@ -379,6 +385,7 @@ class SignalProcessor:
         0
         """
         self._cvd_deque.clear()
+        self._running_cvd = 0.0
         self._state.cvd_60s = 0.0
         self._state.cvd_aligned = False
         logger.info("CVD accumulator reset (LOCKDOWN resume).")
