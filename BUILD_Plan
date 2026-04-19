@@ -1,0 +1,57 @@
+# Polymarket BTC Sniper v2.3 — Build Task Tracker
+
+## Iterasi 0 — Project Bootstrap ✅
+- [x] requirements.txt
+- [x] .env.example (50+ vars)
+- [x] config.py (BotConfig + validate_config + banner)
+- [x] core/__init__.py
+- [x] core/engine.py (utility functions)
+- [x] feeds/__init__.py (6 event dataclasses)
+- [x] risk/__init__.py
+- [x] logs/__init__.py
+- [x] cli/__init__.py
+- [x] output/.gitkeep
+- [x] main.py (argparse + signal handling)
+
+## Iterasi 1 — Feed Layer ✅
+- [x] feeds/hyperliquid_ws.py (trades + l2Book + heartbeat + backoff)
+- [x] feeds/polymarket_ws.py (orderbook + odds + subscribe/unsub)
+- [x] feeds/chainlink_feed.py (RPC poll + age tracking + staleness)
+
+## Iterasi 2 — Signal Processor ✅
+- [x] core/signal_processor.py (CVD deque + ATR candles + velocity + gap)
+
+## Iterasi 3 — Entry Gates ✅
+- [x] risk/gates.py (7-gate AND, Gate 4=Odds, short-circuit)
+
+## Iterasi 4 — Order Executor + Claim Manager ✅
+- [x] core/order_executor.py (paper guard + Check B + EIP-712)
+- [x] core/claim_manager.py (auto-claim + retry + wallet type)
+
+## Iterasi 5 — Circuit Breaker + Safety Monitor ✅
+- [x] core/circuit_breaker.py (state machine + 4-step resume)
+- [x] risk/safety_monitor.py (10 triggers + 0.5s loop)
+
+## Iterasi 6 — Audit Logger ✅
+- [x] logs/audit_logger.py (4 CSV + event_log + atomic JSON)
+
+## Iterasi 7 — CLI Dashboard ✅
+- [x] cli/dashboard.py (6-panel rich.Live)
+
+## Iterasi 8 — Main Engine + Integration ✅
+- [x] core/engine.py (full: startup + main_loop + shutdown)
+- [x] main.py (full: argparse + asyncio.run)
+
+## Iterasi 9 — Testing Suite ✅
+- [x] tests/__init__.py + conftest.py
+- [x] tests/test_gates.py (16 tests)
+- [x] tests/test_signal_processor.py (7 tests)
+- [x] tests/test_circuit_breaker.py (8 tests)
+- [x] tests/test_audit_logger.py (12 tests)
+- [x] tests/test_order_executor.py (5 tests)
+
+## Summary
+- **29 files** created
+- **~180KB** total source code
+- **48 test functions** across 5 test files
+- **0 placeholders / TODO / pass without implementation**

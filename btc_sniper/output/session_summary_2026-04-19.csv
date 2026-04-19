@@ -1,0 +1,8 @@
+session_id,start_time,end_time,duration_min,bot_version,bot_mode,total_windows,windows_traded,windows_skipped,windows_locked,wins,losses,win_rate,total_cost_usdc,total_payout_usdc,net_pnl_usdc,avg_entry_odds,avg_gap_at_entry,avg_blockchain_latency_ms,skip_gap_insufficient,skip_cvd_not_aligned,skip_odds_too_low,skip_odds_too_high,skip_no_liquidity,skip_slippage,skip_other,lockdown_triggers,unclaimed_balance_usdc,auto_claimed_usdc,manual_claim_required
+2026-04-19-124703,2026-04-19 12:47:03,2026-04-19 13:28:56,41,2.3,paper,1,0,1,0,0,0,0.0,0.0,0.0,0.0,0,0,0,0,0,0,0,0,0,1,,0.0,0.0,0.0
+2026-04-19-132902,2026-04-19 13:29:02,2026-04-19 13:29:17,0,2.3,paper,1,0,0,0,0,0,0.0,0.0,0.0,0.0,0,0,0,0,0,0,0,0,0,0,,0.0,0.0,0.0
+2026-04-19-134055,2026-04-19 13:40:55,2026-04-19 14:01:24,20,2.3,paper,1,0,1,0,0,0,0.0,0.0,0.0,0.0,0,0,0,0,0,0,0,0,0,1,,0.0,0.0,0.0
+2026-04-19-143957,2026-04-19 14:39:57,2026-04-19 14:57:33,17,2.3,paper,1,0,0,0,0,0,0.0,0.0,0.0,0.0,0,0,0,0,0,0,0,0,0,0,,0.0,0.0,0.0
+2026-04-19-150536,2026-04-19 15:05:36,2026-04-19 15:20:00,14,2.3,paper,1,0,0,0,0,0,0.0,0.0,0.0,0.0,0,0,0,0,0,0,0,0,0,0,,0.0,0.0,0.0
+2026-04-19-154810,2026-04-19 15:48:10,2026-04-19 15:48:24,0,2.3,paper,1,0,0,0,0,0,0.0,0.0,0.0,0.0,0,0,0,0,0,0,0,0,0,0,,0.0,0.0,0.0
+2026-04-19-154847,2026-04-19 15:48:47,2026-04-19 15:58:54,10,2.3,paper,1,0,1,0,0,0,0.0,0.0,0.0,0.0,0,0,0,0,0,0,0,0,0,1,,0.0,0.0,0.0
