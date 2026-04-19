@@ -3943,3 +3943,4 @@ timestamp,event_type,window_id,trigger,mode,details,gate_failed,state_snapshot_j
 2026-04-19 16:21:33.721,QUEUE_FULL,,hyperliquid,,Event dropped,,{}
 2026-04-19 16:21:33.723,QUEUE_FULL,,hyperliquid,,Event dropped,,{}
 2026-04-19 16:21:33.724,QUEUE_FULL,,hyperliquid,,Event dropped,,{}
+2026-04-19 16:30:27.130,SHUTDOWN,,engine,,Bot stopped,,{}
