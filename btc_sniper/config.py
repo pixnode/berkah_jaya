@@ -149,6 +149,9 @@ class BotConfig:
     WS_RECONNECT_BASE_DELAY_SEC: int
     WS_RECONNECT_MAX_DELAY_SEC: int
     SYNC_LATENCY_MAX_SEC: int
+    QUEUE_HL_MAXSIZE: int
+    CVD_CALC_INTERVAL_MS: int
+    MIN_TRADE_SIZE_USD: float
 
     # ── BLOCKCHAIN ────────────────────────────────────
     POLYGON_GAS_TIP_MULTIPLIER: float
@@ -253,6 +256,9 @@ def load_config(env_path: Optional[str] = None) -> BotConfig:
         WS_RECONNECT_BASE_DELAY_SEC=_env_int("WS_RECONNECT_BASE_DELAY_SEC", 1),
         WS_RECONNECT_MAX_DELAY_SEC=_env_int("WS_RECONNECT_MAX_DELAY_SEC", 30),
         SYNC_LATENCY_MAX_SEC=_env_int("SYNC_LATENCY_MAX_SEC", 10),
+        QUEUE_HL_MAXSIZE=_env_int("QUEUE_HL_MAXSIZE", 2000),
+        CVD_CALC_INTERVAL_MS=_env_int("CVD_CALC_INTERVAL_MS", 500),
+        MIN_TRADE_SIZE_USD=_env_float("MIN_TRADE_SIZE_USD", 0.0),
         # BLOCKCHAIN
         POLYGON_GAS_TIP_MULTIPLIER=_env_float("POLYGON_GAS_TIP_MULTIPLIER", 1.0),
         CLAIM_RETRY_MAX=_env_int("CLAIM_RETRY_MAX", 3),
@@ -349,6 +355,8 @@ def validate_config(cfg: BotConfig) -> None:
         ("WS_RECONNECT_BASE_DELAY_SEC", cfg.WS_RECONNECT_BASE_DELAY_SEC),
         ("WS_RECONNECT_MAX_DELAY_SEC", cfg.WS_RECONNECT_MAX_DELAY_SEC),
         ("SYNC_LATENCY_MAX_SEC", cfg.SYNC_LATENCY_MAX_SEC),
+        ("QUEUE_HL_MAXSIZE", cfg.QUEUE_HL_MAXSIZE),
+        ("CVD_CALC_INTERVAL_MS", cfg.CVD_CALC_INTERVAL_MS),
         ("CLAIM_RETRY_MAX", cfg.CLAIM_RETRY_MAX),
         ("CLAIM_RETRY_TIMEOUT_SEC", cfg.CLAIM_RETRY_TIMEOUT_SEC),
         ("CLAIM_RETRY_INTERVAL_SEC", cfg.CLAIM_RETRY_INTERVAL_SEC),

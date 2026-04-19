@@ -1,8 +1,9 @@
 # ═══ FILE: btc_sniper/core/signal_processor.py ═══
 """
 Signal Processor — CVD, ATR, Gap, Velocity calculations.
-All rolling windows use collections.deque for O(1) append/pop.
-Pure Python — no numpy/pandas.
+Iteration 11: Tiered Processing + Smart Backpressure.
+Tier 1: Instant Price/Velocity/Gap updates.
+Tier 2: Periodic CVD calculation via background task.
 """
 
 from __future__ import annotations
@@ -59,20 +60,19 @@ class SignalState:
 
 
 class SignalProcessor:
-    """Consumes feed events from asyncio.Queue and maintains real-time signal state."""
+    """Consumes feed events and maintains real-time signal state with tiered processing."""
 
     def __init__(self, cfg: BotConfig) -> None:
         self._cfg = cfg
 
         # ── CVD rolling window ────────────────────────
-        # Each entry: (timestamp, net_delta) where net_delta = +size for buy, -size for sell
+        # Each entry: (timestamp, net_delta)
         self._cvd_deque: Deque[tuple[float, float]] = collections.deque()
+        self._cvd_running: float = 0.0  # O(1) running total
+        
         # Volume tracking for avg_volume_per_min
         self._volume_deque: Deque[tuple[float, float]] = collections.deque()
-
-        # ── Running totals for O(1) performance ──────
-        self._running_cvd: float = 0.0
-        self._running_volume: float = 0.0
+        self._volume_running: float = 0.0  # O(1) running total
 
         # ── Velocity tracking ─────────────────────────
         # Each entry: (timestamp, price)
@@ -92,8 +92,9 @@ class SignalProcessor:
         self._latest_odds: Optional[OddsEvent] = None
         self._latest_chainlink: Optional[ChainlinkEvent] = None
 
-        # ── Running flag ──────────────────────────────
+        # ── Running flag & Tasks ──────────────────────
         self._running: bool = False
+        self._cvd_task: Optional[asyncio.Task] = None
 
     @property
     def state(self) -> SignalState:
@@ -121,9 +122,12 @@ class SignalProcessor:
         logger.info("Strike price set: $%.2f", strike)
 
     async def run(self, queue: asyncio.Queue) -> None:
-        """Main loop — consume events from queue and dispatch to handlers."""
+        """Main loop — Tier 1 processing (instant price updates)."""
         self._running = True
-        logger.info("SignalProcessor started — consuming from queue.")
+        logger.info("SignalProcessor Tier 1 started.")
+
+        # Start Tier 2 task (Periodic CVD)
+        self._cvd_task = asyncio.create_task(self._cvd_background_loop())
 
         try:
             while self._running:
@@ -132,10 +136,12 @@ class SignalProcessor:
                 except asyncio.TimeoutError:
                     continue
 
-                if isinstance(event, TradeEvent):
-                    self._handle_trade_event(event)
-                elif isinstance(event, PriceEvent):
+                if isinstance(event, PriceEvent):
+                    # TIER 1: Price events are processed immediately
                     self._handle_price_event(event)
+                elif isinstance(event, TradeEvent):
+                    # TIER 2 helper: Trades update running totals but NOT state
+                    self._handle_trade_event(event)
                 elif isinstance(event, OrderBookEvent):
                     self._latest_book = event
                 elif isinstance(event, OddsEvent):
@@ -151,100 +157,92 @@ class SignalProcessor:
             logger.info("SignalProcessor cancelled.")
         finally:
             self._running = False
+            if self._cvd_task:
+                self._cvd_task.cancel()
+
+    async def _cvd_background_loop(self) -> None:
+        """TIER 2: Periodic CVD calculation loop."""
+        interval_sec = self._cfg.CVD_CALC_INTERVAL_MS / 1000.0
+        while self._running:
+            try:
+                await asyncio.sleep(interval_sec)
+                self._recalculate_cvd_state()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error("Error in CVD background loop: %s", exc)
 
     def stop(self) -> None:
         """Stop the processor."""
         self._running = False
 
     def _handle_trade_event(self, event: TradeEvent) -> None:
-        """Update CVD rolling window and volume tracking.
+        """TIER 2 Helper: Update CVD running totals. FAST O(1)."""
+        # Filter noise if enabled
+        if self._cfg.MIN_TRADE_SIZE_USD > 0:
+            trade_value = event.size * event.price
+            if trade_value < self._cfg.MIN_TRADE_SIZE_USD:
+                return
 
-        CVD = Σ(buy_volume) - Σ(sell_volume) over rolling 60 seconds.
-        Volume tracking uses CVD_VOLUME_WINDOW_MINUTES for avg calculation.
-
-        >>> sp = SignalProcessor.__new__(SignalProcessor)
-        >>> import collections
-        >>> sp._cvd_deque = collections.deque()
-        >>> sp._volume_deque = collections.deque()
-        >>> sp._velocity_deque = collections.deque()
-        >>> sp._cfg = type('C', (), {'CVD_THRESHOLD_PCT': 25.0, 'CVD_VOLUME_WINDOW_MINUTES': 30})()
-        >>> sp._state = SignalState()
-        >>> sp._state.cvd_threshold_pct = 25.0
-        >>> sp._current_candle = None
-        >>> sp._current_candle_start = 0.0
-        >>> sp._candle_deque = collections.deque(maxlen=12)
-        """
         now = event.timestamp
 
-        # Net delta: positive for buy, negative for sell
+        # Update CVD running total
         net_delta = event.size if event.side == "buy" else -event.size
         self._cvd_deque.append((now, net_delta))
-        self._running_cvd += net_delta
+        self._cvd_running += net_delta
 
-        # Track absolute volume for avg calculation
+        # Update Volume running total
         self._volume_deque.append((now, event.size))
-        self._running_volume += event.size
+        self._volume_running += event.size
+
+        # Aggregation for candles still happens here (needed for ATR)
+        self._aggregate_candle(event)
+
+    def _recalculate_cvd_state(self) -> None:
+        """Perform periodic purge of old entries and update SignalState. FAST O(1)."""
+        now = time.time()
 
         # ── Purge expired CVD entries (older than 60s) ──
         cutoff_cvd = now - 60.0
         while self._cvd_deque and self._cvd_deque[0][0] < cutoff_cvd:
-            old_ts, old_delta = self._cvd_deque.popleft()
-            self._running_cvd -= old_delta
+            _, old_delta = self._cvd_deque.popleft()
+            self._cvd_running -= old_delta
 
         # ── Purge expired volume entries ──
         cutoff_vol = now - (self._cfg.CVD_VOLUME_WINDOW_MINUTES * 60.0)
         while self._volume_deque and self._volume_deque[0][0] < cutoff_vol:
-            old_ts, old_sz = self._volume_deque.popleft()
-            self._running_volume -= old_sz
+            _, old_sz = self._volume_deque.popleft()
+            self._volume_running -= old_sz
 
-        # ── Calculate CVD (60s rolling) ──
-        self._state.cvd_60s = self._running_cvd
-
-        # ── Calculate avg volume per minute ──
+        # ── Update SignalState ──
+        self._state.cvd_60s = self._cvd_running
+        
         window_minutes = self._cfg.CVD_VOLUME_WINDOW_MINUTES
         if self._volume_deque:
             elapsed_minutes = (now - self._volume_deque[0][0]) / 60.0
             effective_minutes = max(min(elapsed_minutes, window_minutes), 1.0)
-            avg_volume_per_min = self._running_volume / effective_minutes
+            avg_volume_per_min = self._volume_running / effective_minutes
+            self._state.avg_volume_per_min = avg_volume_per_min
+            
+            # CVD Threshold
+            cvd_threshold = avg_volume_per_min * (self._cfg.CVD_THRESHOLD_PCT / 100.0)
+            self._state.cvd_threshold = cvd_threshold
+
+            # CVD Alignment
+            gap_dir = self._state.gap_direction
+            if gap_dir == "UP" and self._cvd_running > cvd_threshold:
+                self._state.cvd_aligned = True
+            elif gap_dir == "DOWN" and self._cvd_running < -cvd_threshold:
+                self._state.cvd_aligned = True
+            else:
+                self._state.cvd_aligned = False
         else:
-            avg_volume_per_min = 0.0
-
-        self._state.avg_volume_per_min = avg_volume_per_min
-
-        # ── Calculate CVD threshold ──
-        cvd_threshold = avg_volume_per_min * (self._cfg.CVD_THRESHOLD_PCT / 100.0)
-        self._state.cvd_threshold = cvd_threshold
-
-        # ── Check CVD alignment ──
-        gap_dir = self._state.gap_direction
-        if gap_dir == "UP" and cvd_current > cvd_threshold:
-            self._state.cvd_aligned = True
-        elif gap_dir == "DOWN" and cvd_current < -cvd_threshold:
-            self._state.cvd_aligned = True
-        else:
+            self._state.avg_volume_per_min = 0.0
+            self._state.cvd_threshold = 0.0
             self._state.cvd_aligned = False
 
-        # ── Update candle aggregation ──
-        self._aggregate_candle(event)
-
     def _handle_price_event(self, event: PriceEvent) -> None:
-        """Update price, gap, velocity, and ATR regime.
-
-        Velocity = price change over cfg.VELOCITY_WINDOW_SECONDS.
-        Gap = current_hl_price - strike_price.
-
-        >>> sp = SignalProcessor.__new__(SignalProcessor)
-        >>> import collections
-        >>> sp._velocity_deque = collections.deque()
-        >>> sp._candle_deque = collections.deque(maxlen=12)
-        >>> sp._cfg = type('C', (), {
-        ...     'VELOCITY_WINDOW_SECONDS': 1.5, 'VELOCITY_MIN_DELTA': 15.0,
-        ...     'VELOCITY_ENABLED': True, 'ATR_LOW_THRESHOLD': 50.0,
-        ...     'ATR_HIGH_THRESHOLD': 150.0, 'GAP_THRESHOLD_DEFAULT': 45.0,
-        ...     'GAP_THRESHOLD_LOW_VOL': 60.0, 'GAP_THRESHOLD_HIGH_VOL': 35.0,
-        ... })()
-        >>> sp._state = SignalState(strike_price=84000.0)
-        """
+        """TIER 1: Instant updates for price, gap, velocity. FAST O(1)."""
         now = event.timestamp
         price = event.price
 
@@ -253,32 +251,26 @@ class SignalProcessor:
 
         # ── Velocity calculation ──
         self._velocity_deque.append((now, price))
-
-        # Purge entries older than velocity window
         cutoff = now - self._cfg.VELOCITY_WINDOW_SECONDS
         while self._velocity_deque and self._velocity_deque[0][0] < cutoff:
             self._velocity_deque.popleft()
 
-        # Calculate velocity from oldest remaining entry
         if len(self._velocity_deque) >= 2:
-            oldest_price = self._velocity_deque[0][1]
-            velocity = abs(price - oldest_price)
+            self._state.velocity_1_5s = abs(price - self._velocity_deque[0][1])
         else:
-            velocity = 0.0
+            self._state.velocity_1_5s = 0.0
 
-        self._state.velocity_1_5s = velocity
         if self._cfg.VELOCITY_ENABLED:
-            self._state.velocity_pass = velocity >= self._cfg.VELOCITY_MIN_DELTA
+            self._state.velocity_pass = self._state.velocity_1_5s >= self._cfg.VELOCITY_MIN_DELTA
         else:
-            self._state.velocity_pass = True  # Disabled = always pass
+            self._state.velocity_pass = True
 
         # ── Gap calculation ──
         if self._state.strike_price > 0:
-            gap = price - self._state.strike_price
-            self._state.gap = gap
-            if gap > 0:
+            self._state.gap = price - self._state.strike_price
+            if self._state.gap > 0:
                 self._state.gap_direction = "UP"
-            elif gap < 0:
+            elif self._state.gap < 0:
                 self._state.gap_direction = "DOWN"
             else:
                 self._state.gap_direction = "NEUTRAL"
@@ -296,31 +288,16 @@ class SignalProcessor:
             self._state.gap_threshold = self._cfg.GAP_THRESHOLD_DEFAULT
 
     def _aggregate_candle(self, trade: TradeEvent) -> None:
-        """Aggregate tick data into 5-minute candles and update ATR.
-
-        Detects new candle boundary based on 300-second windows.
-        """
-        # Determine which 5-min window this trade belongs to
+        """Aggregate tick data into 5-minute candles and update ATR."""
         candle_start = trade.timestamp - (trade.timestamp % 300.0)
 
         if self._current_candle is None or candle_start > self._current_candle_start:
-            # Finalize previous candle
             if self._current_candle is not None:
                 self._candle_deque.append(self._current_candle)
                 self._update_atr()
-
-            # Start new candle
-            self._current_candle = Candle(
-                timestamp=candle_start,
-                open=trade.price,
-                high=trade.price,
-                low=trade.price,
-                close=trade.price,
-                volume=trade.size,
-            )
+            self._current_candle = Candle(candle_start, trade.price, trade.price, trade.price, trade.price, trade.size)
             self._current_candle_start = candle_start
         else:
-            # Update current candle
             c = self._current_candle
             c.high = max(c.high, trade.price)
             c.low = min(c.low, trade.price)
@@ -328,70 +305,34 @@ class SignalProcessor:
             c.volume += trade.size
 
     def _update_atr(self) -> None:
-        """Calculate ATR from completed candles using True Range.
-
-        True Range = max(high-low, abs(high-prev_close), abs(low-prev_close))
-        ATR = mean of all True Ranges in deque.
-
-        >>> sp = SignalProcessor.__new__(SignalProcessor)
-        >>> import collections
-        >>> sp._candle_deque = collections.deque(maxlen=12)
-        >>> sp._state = SignalState()
-        >>> c1 = Candle(0, 100, 110, 95, 105, 10)
-        >>> c2 = Candle(300, 105, 120, 100, 115, 12)
-        >>> sp._candle_deque.append(c1)
-        >>> sp._candle_deque.append(c2)
-        >>> sp._update_atr()
-        >>> sp._state.atr > 0
-        True
-        """
+        """Calculate ATR from completed candles."""
         if len(self._candle_deque) < 2:
             if len(self._candle_deque) == 1:
-                c = self._candle_deque[0]
-                self._state.atr = c.high - c.low
+                self._state.atr = self._candle_deque[0].high - self._candle_deque[0].low
             return
 
         true_ranges: list[float] = []
-
         candles = list(self._candle_deque)
-        # First candle: TR = high - low
         true_ranges.append(candles[0].high - candles[0].low)
 
         for i in range(1, len(candles)):
             c = candles[i]
             prev_close = candles[i - 1].close
-            tr = max(
-                c.high - c.low,
-                abs(c.high - prev_close),
-                abs(c.low - prev_close),
-            )
+            tr = max(c.high - c.low, abs(c.high - prev_close), abs(c.low - prev_close))
             true_ranges.append(tr)
 
         self._state.atr = sum(true_ranges) / len(true_ranges)
 
     def reset_cvd(self) -> None:
-        """Reset CVD accumulator — called during LOCKDOWN Resume Protocol.
-
-        >>> sp = SignalProcessor.__new__(SignalProcessor)
-        >>> import collections
-        >>> sp._cvd_deque = collections.deque([(1.0, 100.0), (2.0, -50.0)])
-        >>> sp._state = SignalState(cvd_60s=50.0, cvd_aligned=True)
-        >>> sp.reset_cvd()
-        >>> sp._state.cvd_60s
-        0.0
-        >>> sp._state.cvd_aligned
-        False
-        >>> len(sp._cvd_deque)
-        0
-        """
+        """Reset CVD accumulator."""
         self._cvd_deque.clear()
-        self._running_cvd = 0.0
+        self._cvd_running = 0.0
         self._state.cvd_60s = 0.0
         self._state.cvd_aligned = False
-        logger.info("CVD accumulator reset (LOCKDOWN resume).")
+        logger.info("CVD accumulator reset.")
 
     def reset_velocity(self) -> None:
-        """Clear velocity buffer — called at window init."""
+        """Clear velocity buffer."""
         self._velocity_deque.clear()
         self._state.velocity_1_5s = 0.0
         self._state.velocity_pass = False

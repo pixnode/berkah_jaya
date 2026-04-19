@@ -231,14 +231,36 @@ class HyperliquidFeed:
             logger.debug("Hyperliquid: failed to parse l2Book: %s", exc)
 
     async def _emit(self, event: object) -> None:
-        """Put event into the queue. Log warning if queue is full (non-blocking)."""
+        """Put event into the queue with smart backpressure logic."""
         if self._queue is None:
             return
+
         try:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:
-            logger.warning("QUEUE_FULL: Hyperliquid event dropped — queue at capacity")
-            await self._log_event("QUEUE_FULL", "hyperliquid", "Event dropped", 0)
+            q_size = self._queue.qsize()
+            max_size = self._queue.maxsize or 1
+            fill_pct = (q_size / max_size) * 100
+
+            # Informative logging based on severity
+            if fill_pct >= 90:
+                logger.error(
+                    "QUEUE_CRITICAL: %d%% full — processor too slow, "
+                    "consider increasing CVD_CALC_INTERVAL_MS", int(fill_pct)
+                )
+            elif fill_pct >= 70:
+                logger.warning("QUEUE_HIGH: %d%% full", int(fill_pct))
+
+            # Smart Drop Logic
+            if isinstance(event, TradeEvent):
+                # TradeEvents are okay to drop under pressure (CVD will be slightly less accurate)
+                pass
+            else:
+                # PriceEvent and ChainlinkEvent: never drop. Block briefly to ensure delivery.
+                try:
+                    await asyncio.wait_for(self._queue.put(event), timeout=0.1)
+                except asyncio.TimeoutError:
+                    logger.error("CRITICAL: Non-trade event dropped after timeout — %s", type(event).__name__)
 
     async def _reconnect_with_backoff(self) -> None:
         """Reconnect with exponential backoff. Emits DataStaleEvent if max retries exceeded."""
