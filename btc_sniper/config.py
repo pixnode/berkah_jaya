@@ -154,6 +154,11 @@ class BotConfig:
     MIN_TRADE_SIZE_USD: float
     SAFETY_MONITOR_STARTUP_GRACE_SEC: int
 
+    # ── TIMING & EXECUTION ────────────────────────────
+    WINDOW_ARMED_T_SEC: float
+    WINDOW_EXECUTE_T_START: int
+    WINDOW_EXECUTE_T_END: int
+
     # ── BLOCKCHAIN ────────────────────────────────────
     POLYGON_GAS_TIP_MULTIPLIER: float
     CLAIM_RETRY_MAX: int
@@ -232,8 +237,9 @@ def load_config(env_path: Optional[str] = None) -> BotConfig:
         VELOCITY_MIN_DELTA=_env_float("VELOCITY_MIN_DELTA", 15.0),
         VELOCITY_WINDOW_SECONDS=_env_float("VELOCITY_WINDOW_SECONDS", 1.5),
         # TIMING
-        GOLDEN_WINDOW_START=_env_int("GOLDEN_WINDOW_START", 60),
-        GOLDEN_WINDOW_END=_env_int("GOLDEN_WINDOW_END", 42),
+        WINDOW_ARMED_T_SEC=_env_float("WINDOW_ARMED_T_SEC", 60.0),
+        WINDOW_EXECUTE_T_START=_env_int("WINDOW_EXECUTE_T_START", 48),
+        WINDOW_EXECUTE_T_END=_env_int("WINDOW_EXECUTE_T_END", 42),
         # SLIPPAGE
         SLIPPAGE_THRESHOLD_NORMAL=_env_float("SLIPPAGE_THRESHOLD_NORMAL", 1.0),
         SLIPPAGE_THRESHOLD_ELEVATED=_env_float("SLIPPAGE_THRESHOLD_ELEVATED", 1.5),

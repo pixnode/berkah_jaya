@@ -37,6 +37,8 @@ class SafetyMonitor:
         self._running: bool = False
         self._last_safety_event: Optional[SafetyEvent] = None
 
+        self._start_time = time.time()
+        
         # References to shared state — set by engine before start
         self._hl_feed: Optional[object] = None
         self._poly_feed: Optional[object] = None
@@ -107,6 +109,10 @@ class SafetyMonitor:
         if self._circuit_breaker and hasattr(self._circuit_breaker, "is_lockdown"):
             if self._circuit_breaker.is_lockdown:
                 return
+
+        # ── STARTUP GRACE PERIOD ──
+        if now - self._start_time < self._cfg.SAFETY_MONITOR_STARTUP_GRACE_SEC:
+            return
 
         # ── TRIGGER 1: DATA_STALE (Hyperliquid) ──
         if self._hl_feed and hasattr(self._hl_feed, "last_message_at"):

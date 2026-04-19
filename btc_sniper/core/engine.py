@@ -45,6 +45,9 @@ class BotEngine:
         from cli.dashboard import Dashboard
         from core.order_executor import OrderExecutor
 
+        # Ensure output directory exists
+        os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
+
         self._audit_logger = AuditLogger(cfg)
         self._hl_feed = HyperliquidFeed(cfg, self._audit_logger)
         self._poly_feed = PolymarketFeed(cfg, self._audit_logger)
@@ -264,7 +267,10 @@ class BotEngine:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         
-        await self._audit_logger.close()
+        if hasattr(self, "_audit_logger") and self._audit_logger:
+            if hasattr(self._audit_logger, "close"):
+                await self._audit_logger.close()
+                
         logger.info("═══ SHUTDOWN COMPLETE ═══")
 
     async def _ui_exporter_loop(self) -> None:
