@@ -106,6 +106,7 @@ class BotEngine:
             self._signal_processor.run(self._queue),
             self._safety_monitor.run(),
             self._dashboard.run(),
+            self._ui_exporter_loop(),
             self._periodic_state_flush(),
             self._periodic_snapshot_writer(),
         ]:
@@ -360,6 +361,37 @@ class BotEngine:
             slippage=order_result.slippage_delta, claim=claim_method or "—",
         )
         self._dashboard.state.trade_history.append(entry)
+
+    async def _ui_exporter_loop(self) -> None:
+        """Saves a JSON snapshot of the dashboard state for external viewers."""
+        import json
+        import dataclasses
+        
+        ui_file = os.path.join(self._cfg.OUTPUT_DIR, "dashboard_ui.json")
+        
+        while not self._shutdown.is_set():
+            try:
+                # Helper to convert dataclass to dict, handling nested dataclasses
+                def d_to_dict(obj):
+                    if dataclasses.is_dataclass(obj):
+                        result = {}
+                        for f in dataclasses.fields(obj):
+                            value = getattr(obj, f.name)
+                            result[f.name] = d_to_dict(value)
+                        return result
+                    elif isinstance(obj, list):
+                        return [d_to_dict(i) for i in obj]
+                    elif isinstance(obj, dict):
+                        return {k: d_to_dict(v) for k, v in obj.items()}
+                    else:
+                        return obj
+
+                state_dict = d_to_dict(self._dashboard.state)
+                with open(ui_file, "w") as f:
+                    json.dump(state_dict, f)
+            except Exception:
+                pass
+            await asyncio.sleep(1.0)
 
     async def _periodic_state_flush(self) -> None:
         while not self._shutdown.is_set():
