@@ -127,11 +127,11 @@ class BotEngine:
             self._dashboard.state.time_remaining = t_rem
             
             # Mode selection
-            if t_rem > self._cfg.WINDOW_ARMED_T_SEC:
+            if t_rem > self._cfg.GOLDEN_WINDOW_START:
                 mode = "INIT"
-            elif t_rem > self._cfg.WINDOW_EXECUTE_T_START:
+            elif t_rem > 48: # ARMED is the buffer before execution
                 mode = "ARMED"
-            elif t_rem >= self._cfg.WINDOW_EXECUTE_T_END:
+            elif t_rem >= self._cfg.GOLDEN_WINDOW_END:
                 mode = "EXECUTE"
             else:
                 mode = "SETTLE"
