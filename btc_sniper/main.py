@@ -70,29 +70,38 @@ async def async_main(cfg: BotConfig) -> None:
 
     # Graceful shutdown on SIGINT/SIGTERM
     loop = asyncio.get_running_loop()
-    shutdown_event = asyncio.Event()
+    shutdown_initiated = False
 
     def _signal_handler() -> None:
+        nonlocal shutdown_initiated
+        if shutdown_initiated:
+            return
+        shutdown_initiated = True
         logger.info("Shutdown signal received — initiating graceful shutdown...")
-        shutdown_event.set()
+        # Create task to stop the engine
+        loop.create_task(engine.stop())
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, _signal_handler)
         except NotImplementedError:
-            # Windows does not support add_signal_handler for SIGTERM
+            # Windows workaround: signals are handled via KeyboardInterrupt in main()
             pass
 
     try:
         await engine.start()
-        # Wait until shutdown signal
-        await shutdown_event.wait()
-    except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt received — shutting down...")
     except Exception as exc:
-        logger.critical("Uncaught exception in engine: %s", exc, exc_info=True)
+        if not shutdown_initiated:
+            logger.critical("Uncaught exception in engine: %s", exc, exc_info=True)
     finally:
-        await engine.stop()
+        # engine.stop() will be called here if start() returns naturally
+        # or if an exception occurs. If triggered by signal, stop() was 
+        # already tasked, but BotEngine.stop() is safe to call twice.
+        if not shutdown_initiated:
+            await engine.stop()
+        else:
+            # Wait a bit for the signal-triggered stop() task to complete if needed
+            await asyncio.sleep(0.5)
         logger.info("Shutdown complete.")
 
 

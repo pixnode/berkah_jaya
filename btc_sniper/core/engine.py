@@ -23,6 +23,7 @@ class BotEngine:
         self._cfg = cfg
         self._tasks: Set[asyncio.Task] = set()
         self._shutdown = asyncio.Event()
+        self._stopping = False
         self._session_id = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
         self._session_start = time.time()
         self._window_count = 0
@@ -392,6 +393,9 @@ class BotEngine:
             await self._audit_logger.log_snapshot(snap)
 
     async def stop(self) -> None:
+        if self._stopping:
+            return
+        self._stopping = True
         from logs.audit_logger import EventRecord, SessionStats
         self._shutdown.set()
         logger.info("Stopping engine...")
