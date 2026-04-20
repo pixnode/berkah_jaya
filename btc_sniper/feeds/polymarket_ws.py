@@ -47,6 +47,13 @@ class PolymarketFeed:
         return self._current_slug is not None
 
     @property
+    def sync_latency(self) -> float:
+        """Time in seconds since the last message was received."""
+        if self._last_message_at <= 0:
+            return 0.0
+        return time.time() - self._last_message_at
+
+    @property
     def last_message_at(self) -> float:
         """Unix timestamp of the last received message.
         Returns current time if not yet subscribed (= not stale)."""

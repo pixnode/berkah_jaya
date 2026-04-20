@@ -356,7 +356,7 @@ class BotEngine:
         ds.eoa_warning = self._claim_manager.eoa_warning
         
         # Sync Health Metrics
-        ds.chainlink_age_sec = self._chainlink_feed.last_event.age if self._chainlink_feed.last_event else 999.0
+        ds.chainlink_age_sec = self._chainlink_feed.last_event.age_seconds if self._chainlink_feed.last_event else 999.0
         ds.poly_sync_latency_sec = self._poly_feed.sync_latency
         
         ds.gate_values = {
