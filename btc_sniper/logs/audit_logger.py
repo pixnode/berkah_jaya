@@ -322,6 +322,10 @@ class AuditLogger:
                     except Exception:
                         pass
 
+    async def save_snapshot(self, state: dict) -> None:
+        """Alias untuk flush_state — dipanggil dari engine periodic writer."""
+        await self.flush_state(state)
+
     # ═══════════════════════════════════════════════════
     # POST-HOC UPDATE METHODS
     # ═══════════════════════════════════════════════════

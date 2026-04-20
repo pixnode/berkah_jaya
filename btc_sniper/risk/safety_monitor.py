@@ -123,8 +123,7 @@ class SafetyMonitor:
         # GUARD: Only check if Polymarket is subscribed to a market
         if self._poly_feed and hasattr(self._poly_feed, "is_subscribed"):
             if self._poly_feed.is_subscribed:
-                # Polymarket 5m markets can be quiet — use 30s threshold (not 5s like HL)
-                poly_stale_sec = max(self._cfg.WS_STALE_THRESHOLD_SEC, 30)
+                poly_stale_sec = getattr(self._cfg, "POLY_STALE_THRESHOLD_SEC", 120)
                 poly_age = now - self._poly_feed.last_message_at if self._poly_feed.last_message_at > 0 else 999
                 if poly_age > poly_stale_sec:
                     await self._emit_event(

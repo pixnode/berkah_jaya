@@ -35,6 +35,7 @@ class BotEngine:
 
         # State for monitoring
         self._engine_state = {"window_id": "—", "t_remaining": 0, "bot_mode": "INIT"}
+        self._last_subscribed_slug: Optional[str] = None
 
         # Components
         from logs.audit_logger import AuditLogger
@@ -121,6 +122,16 @@ class BotEngine:
             slug = get_current_window_slug()
             t_rem = get_time_remaining()
             
+            if slug != self._last_subscribed_slug:
+                # Window baru — subscribe ulang
+                if self._poly_feed.is_connected:
+                    await self._poly_feed.subscribe(slug)
+                self._last_subscribed_slug = slug
+                self._order_sent = False
+                if hasattr(self._signal_processor, "reset_cvd"):
+                    self._signal_processor.reset_cvd()
+                logger.info(f"New window: {slug}")
+            
             # Update state for dashboard
             self._engine_state.update({"window_id": slug, "t_remaining": t_rem})
             self._dashboard.state.window_id = slug
@@ -144,9 +155,30 @@ class BotEngine:
             # Update dashboard state from components
             self._sync_dashboard()
 
+            # Lockdown Auto-Resume logic (PRD v2.3 compliant Section 06)
+            if self._circuit_breaker.is_lockdown:
+                # Try resume every 5 seconds or when a new window starts
+                if int(t_rem) % 5 == 0 or t_rem > 298:
+                    resume_res = await self._circuit_breaker.attempt_resume(
+                        hl_feed_connected=self._hl_feed.is_connected,
+                        poly_feed_connected=self._poly_feed.is_connected,
+                        chainlink_fresh=self._chainlink_feed.is_connected,
+                        wallet_balance=self._dashboard.state.balance,
+                        unclaimed_since_sec=self._claim_manager.unclaimed_since,
+                        signal_processor=self._signal_processor
+                    )
+                    if resume_res.success:
+                        logger.info("═══ LOCKDOWN RESUMED ═══ All health checks passed.")
+                    else:
+                        # Log why resume was denied if it's not just a cooldown
+                        if resume_res.reason != "COOLDOWN_NOT_ELAPSED":
+                            logger.debug("Resume denied: %s | Failed checks: %s", resume_res.reason, resume_res.failed_checks)
+
             # Execution logic
             if mode == "EXECUTE" and not self._order_sent and not self._circuit_breaker.is_lockdown:
                 await self._handle_execution(slug)
+                
+            await asyncio.sleep(0.1)
 
             if self._dashboard.quit_requested:
                 self._shutdown.set()
@@ -155,29 +187,65 @@ class BotEngine:
 
     async def _handle_execution(self, slug: str) -> None:
         """Evaluate gates and execute order if all pass."""
-        from risk.gates import evaluate_all_gates
+        from risk.gates import GateEvaluator
         from logs.audit_logger import TradeRecord, SkipRecord
         
-        gate_res = evaluate_all_gates(
-            self._cfg, self._signal_processor.state, self._dashboard.state
+        evaluator = GateEvaluator(self._cfg)
+        t_rem = get_time_remaining()
+        gate_res = evaluator.evaluate(
+            signal=self._signal_processor.state,
+            book=self._signal_processor.latest_book,
+            odds=self._signal_processor.latest_odds,
+            time_remaining=t_rem,
+            order_sent=self._order_sent,
         )
         
-        if gate_res.all_passed:
+        if gate_res.all_pass:
             self._order_sent = True
             logger.info("🎯 TARGET ACQUIRED: %s at odds %.3f", gate_res.side, gate_res.target_ask)
             
             order_res = await self._order_executor.execute(gate_res, slug)
             
+            ss = self._signal_processor.state
+            latest_odds = self._signal_processor.latest_odds
+            
             if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
-                # Log trade
                 trade = TradeRecord(
-                    time.time(), slug, order_res.side or "", order_res.entry_odds or 0,
-                    order_res.shares_bought or 0, order_res.cost_usd or 0,
-                    order_res.status, order_res.tx_hash or "", 0, 0, ""
+                    session_id=self._session_id,
+                    window_id=slug,
+                    timestamp_trigger=datetime.now(timezone.utc).isoformat(),
+                    timestamp_order_sent=datetime.now(timezone.utc).isoformat(),
+                    timestamp_confirmed=datetime.now(timezone.utc).isoformat(),
+                    side=order_res.side or gate_res.side or "",
+                    strike_price=gate_res.target_ask,
+                    hl_price_at_trigger=ss.hl_price,
+                    gap_value=ss.gap,
+                    gap_threshold_used=ss.gap_threshold,
+                    atr_regime=ss.vol_regime,
+                    cvd_60s=ss.cvd_60s,
+                    cvd_threshold_used=ss.cvd_threshold,
+                    cvd_threshold_pct=self._cfg.CVD_MIN_PCT if hasattr(self._cfg, "CVD_MIN_PCT") else 0.0,
+                    velocity=ss.velocity_1_5s,
+                    entry_odds=order_res.entry_odds or gate_res.target_ask,
+                    odds_in_sweet_spot=(self._cfg.ODDS_SWEET_SPOT_LOW <= (order_res.entry_odds or gate_res.target_ask) <= self._cfg.ODDS_SWEET_SPOT_HIGH),
+                    spread_pct=0.0,
+                    expected_odds=gate_res.expected_odds,
+                    mispricing_delta=0.0,
+                    slippage_delta=order_res.slippage_delta,
+                    slippage_threshold_used=self._cfg.MAX_SLIPPAGE_PCT if hasattr(self._cfg, "MAX_SLIPPAGE_PCT") else 0.0,
+                    blockchain_latency_ms=0,
+                    shares_bought=order_res.shares_bought or 0.0,
+                    cost_usdc=order_res.cost_usd or 0.0,
+                    result=order_res.status,
+                    resolution_price=None,
+                    payout_usdc=None,
+                    pnl_usdc=None,
+                    claim_method=None,
+                    claim_timestamp=None,
+                    bot_version=getattr(self._cfg, "BOT_VERSION", "2.3")
                 )
                 await self._audit_logger.log_trade(trade)
                 
-                # Update dashboard history
                 from cli.dashboard import TradeHistoryEntry
                 entry = TradeHistoryEntry(
                     number=len(self._dashboard.state.trade_history)+1,
@@ -189,13 +257,36 @@ class BotEngine:
                 )
                 self._dashboard.state.trade_history.append(entry)
                 
-                # Start claim task
                 asyncio.create_task(self._claim_and_finalize(slug, order_res, entry))
             else:
                 logger.warning("Order failed: %s - %s", order_res.status, order_res.error_msg)
         else:
-            # Skip record
-            skip = SkipRecord(time.time(), slug, gate_res.failed_gate_id or 0, gate_res.details)
+            ss = self._signal_processor.state
+            latest_odds = self._signal_processor.latest_odds
+            
+            skip = SkipRecord(
+                session_id=self._session_id,
+                window_id=slug,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                skip_reason=gate_res.fail_reason or "",
+                skip_stage=f"Gate {gate_res.failed_gate}" if gate_res.failed_gate else "Unknown",
+                gap_value=ss.gap,
+                gap_threshold=ss.gap_threshold,
+                gap_gate_pass=gate_res.gate_statuses.get(1, False),
+                cvd_value=ss.cvd_60s,
+                cvd_gate_pass=gate_res.gate_statuses.get(2, False),
+                liquidity_gate_pass=gate_res.gate_statuses.get(3, False),
+                current_ask=latest_odds.up_odds if gate_res.side == "UP" else (latest_odds.down_odds if latest_odds else 0.0),
+                min_odds=self._cfg.ODDS_SWEET_SPOT_LOW,
+                max_odds=self._cfg.ODDS_SWEET_SPOT_HIGH,
+                odds_gate_pass=gate_res.gate_statuses.get(4, False),
+                golden_window_gate_pass=gate_res.gate_statuses.get(5, False),
+                velocity_gate_pass=gate_res.gate_statuses.get(6, False),
+                slippage_gate_pass=gate_res.gate_statuses.get(7, False),
+                t_remaining_sec=t_rem,
+                would_have_won=None,
+                chainlink_age_sec=0
+            )
             await self._audit_logger.log_skip(skip)
 
     async def _claim_and_finalize(self, slug, order_res, history_entry):
@@ -242,6 +333,28 @@ class BotEngine:
             ds.up_bid = latest_odds.up_odds - 0.01
             ds.down_ask = latest_odds.down_odds
             ds.down_bid = latest_odds.down_odds - 0.01
+            
+        # Panel E: Safety Gates
+        from risk.gates import GateEvaluator
+        evaluator = GateEvaluator(self._cfg)
+        gate_res = evaluator.evaluate(
+            signal=ss,
+            book=self._signal_processor.latest_book,
+            odds=latest_odds,
+            time_remaining=self._dashboard.state.time_remaining,
+            order_sent=self._order_sent,
+        )
+        ds.gate_statuses = gate_res.gate_statuses
+        
+        ds.gate_values = {
+            1: f"${ss.gap:+.1f} / ${ss.gap_threshold:.1f}",
+            2: f"${ss.cvd_60s:+.0f} / {ss.cvd_threshold:.0f}",
+            3: f"Ask: {ds.up_ask:.2f} / Edge: {'YES' if latest_odds and ds.up_ask < gate_res.expected_odds else 'NO'}",
+            4: f"[{self._cfg.ODDS_SWEET_SPOT_LOW:.2f}-{self._cfg.ODDS_SWEET_SPOT_HIGH:.2f}]" if latest_odds else "NO DATA",
+            5: f"T-{self._dashboard.state.time_remaining}s",
+            6: f"${ss.velocity_1_5s:.1f}/s" if self._cfg.VELOCITY_ENABLED else "DISABLED",
+            7: "SENT" if self._order_sent else "CLEAR",
+        }
             
         ds.is_lockdown = self._circuit_breaker.is_lockdown
         ds.lockdown_reason = self._circuit_breaker.lockdown_reason
@@ -299,4 +412,4 @@ class BotEngine:
     async def _periodic_snapshot_writer(self) -> None:
         while not self._shutdown.is_set():
             await asyncio.sleep(self._cfg.STATE_SNAPSHOT_INTERVAL_SEC)
-            await self._audit_logger.save_snapshot(dict(self._engine_state))
+            await self._audit_logger.flush_state(dict(self._engine_state))

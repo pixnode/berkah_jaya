@@ -54,6 +54,8 @@ class SignalState:
     buy_volume_60s: float = 0.0
     sell_volume_60s: float = 0.0
     latest_odds: object = None
+    up_odds: float = 0.0
+    down_odds: float = 0.0
 
 
 class SignalProcessor:
@@ -109,10 +111,12 @@ class SignalProcessor:
         """Latest odds event."""
         return self._latest_odds
 
-    def update_odds(self, odds_event: OddsEvent) -> None:
+    def _handle_odds_event(self, event: OddsEvent) -> None:
         """Update latest odds in both instance and state."""
-        self._latest_odds = odds_event
-        self._state.latest_odds = odds_event
+        self._latest_odds = event
+        self._state.latest_odds = event
+        self._state.up_odds = event.up_odds
+        self._state.down_odds = event.down_odds
 
     async def run(self, queue: asyncio.Queue) -> None:
         """Main event consumption loop (Tier 1)."""
@@ -175,7 +179,7 @@ class SignalProcessor:
             self._latest_book = event
 
         elif isinstance(event, OddsEvent):
-            self.update_odds(event)
+            self._handle_odds_event(event)
 
     def _update_gap(self) -> None:
         """Calculate gap and direction."""

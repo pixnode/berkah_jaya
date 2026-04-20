@@ -15,6 +15,13 @@ from typing import List, Dict
 # Add parent dir to sys.path to import modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# Force UTF-8 for Windows consoles to avoid cp1252 UnicodeEncodeError
+if sys.stdout.encoding.lower() != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 from rich.live import Live
 from cli.dashboard import Dashboard, DashboardState, TradeHistoryEntry
 from config import load_config

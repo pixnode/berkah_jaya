@@ -162,12 +162,38 @@ class PolymarketFeed:
         if self._ws is None:
             return
         try:
+            import aiohttp
+            import json
+            
+            # Fetch clobTokenIds from Gamma API
+            gamma_url = f"https://gamma-api.polymarket.com/events?slug={market_slug}"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(gamma_url, timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data and len(data) > 0 and "markets" in data[0] and len(data[0]["markets"]) > 0:
+                            market_data = data[0]["markets"][0]
+                            clob_token_ids_str = market_data.get("clobTokenIds", "[]")
+                            clob_token_ids = json.loads(clob_token_ids_str)
+                            
+                            if clob_token_ids:
+                                self._up_token_id = clob_token_ids[0]
+                                if len(clob_token_ids) > 1:
+                                    self._down_token_id = clob_token_ids[1]
+                                    
+                                await self._ws.send(json.dumps({
+                                    "assets_ids": clob_token_ids,
+                                    "type": "market",
+                                }))
+                                logger.info("Subscribed to Polymarket assets: %s for %s", clob_token_ids, market_slug)
+                                return
+                            
+            # Fallback if gamma api fails or no clobTokenIds found
+            logger.warning("Failed to get clobTokenIds for %s, trying slug fallback", market_slug)
             await self._ws.send(json.dumps({
-                "type": "subscribe",
-                "market": market_slug,
-                "channel": "book",
+                "assets_ids": [market_slug],
+                "type": "market",
             }))
-            logger.info("Subscribed to Polymarket market: %s", market_slug)
         except Exception as exc:
             logger.error("Failed to subscribe to %s: %s", market_slug, exc)
             self._current_slug = None
@@ -205,12 +231,21 @@ class PolymarketFeed:
             logger.warning("Polymarket: invalid JSON message, skipping")
             return
 
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    await self._dispatch_single_message(item)
+        elif isinstance(data, dict):
+            await self._dispatch_single_message(data)
+
+    async def _dispatch_single_message(self, data: dict) -> None:
+        """Helper to route a single dictionary payload."""
         msg_type = data.get("type", "")
         event_type = data.get("event_type", "")
 
         if msg_type == "book" or event_type == "book":
             await self._handle_book_update(data)
-        elif msg_type == "price_change" or event_type == "price_change":
+        elif msg_type in ("price_change", "last_trade_price") or event_type in ("price_change", "last_trade_price"):
             await self._handle_price_change(data)
         elif msg_type == "tick_size_change":
             pass
@@ -220,6 +255,7 @@ class PolymarketFeed:
     async def _handle_book_update(self, data: dict) -> None:
         """Parse order book update and emit OrderBookEvent."""
         try:
+            market = data.get("market", data.get("asset_id", ""))
             bids = data.get("bids", [])
             asks = data.get("asks", [])
 
@@ -228,13 +264,25 @@ class PolymarketFeed:
             down_ask = 0.0
             down_bid = 0.0
 
+            raw_ask = 0.0
+            raw_bid = 0.0
             if asks:
-                up_ask = float(asks[0].get("price", asks[0].get("px", 0)))
+                raw_ask = float(asks[0].get("price", asks[0].get("px", 0)))
             if bids:
-                up_bid = float(bids[0].get("price", bids[0].get("px", 0)))
+                raw_bid = float(bids[0].get("price", bids[0].get("px", 0)))
+                
+            is_down_token = hasattr(self, "_down_token_id") and market == self._down_token_id
 
-            down_bid = round(1.0 - up_ask, 4) if up_ask > 0 else 0.0
-            down_ask = round(1.0 - up_bid, 4) if up_bid > 0 else 0.0
+            if is_down_token:
+                down_ask = raw_ask
+                down_bid = raw_bid
+                up_bid = round(1.0 - down_ask, 4) if down_ask > 0 else 0.0
+                up_ask = round(1.0 - down_bid, 4) if down_bid > 0 else 0.0
+            else:
+                up_ask = raw_ask
+                up_bid = raw_bid
+                down_bid = round(1.0 - up_ask, 4) if up_ask > 0 else 0.0
+                down_ask = round(1.0 - up_bid, 4) if up_bid > 0 else 0.0
 
             mid = (up_ask + up_bid) / 2.0 if (up_ask > 0 and up_bid > 0) else 1.0
             spread_pct = ((up_ask - up_bid) / mid * 100.0) if mid > 0 else 0.0
@@ -259,17 +307,35 @@ class PolymarketFeed:
     async def _handle_price_change(self, data: dict) -> None:
         """Parse price change event and emit OddsEvent."""
         try:
-            price = float(data.get("price", 0))
-            side = data.get("side", "").lower()
-            now = time.time()
+            market = data.get("market", data.get("asset_id", ""))
+            price = 0.0
+            side = ""
+            
+            if "changes" in data and isinstance(data["changes"], list) and len(data["changes"]) > 0:
+                change = data["changes"][0]
+                price = float(change.get("price", 0))
+                side = change.get("side", "").lower()
+            else:
+                price = float(data.get("price", 0))
+                side = data.get("side", "").lower()
 
-            if side in ("yes", "up"):
+            if price <= 0:
+                return
+
+            now = time.time()
+            
+            is_down_token = hasattr(self, "_down_token_id") and market == self._down_token_id
+            
+            if side in ("yes", "up") or (not side and not is_down_token):
+                # This is the UP token (or side is explicitly UP)
                 odds_event = OddsEvent(timestamp=now, up_odds=price, down_odds=round(1.0 - price, 4))
             else:
+                # This is the DOWN token
                 odds_event = OddsEvent(timestamp=now, up_odds=round(1.0 - price, 4), down_odds=price)
+            
             await self._emit(odds_event)
 
-        except (KeyError, ValueError, TypeError) as exc:
+        except (KeyError, ValueError, TypeError, IndexError) as exc:
             logger.debug("Polymarket: failed to parse price change: %s", exc)
 
     async def _emit(self, event: object) -> None:
