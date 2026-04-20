@@ -63,8 +63,17 @@ async def run_viewer():
                     with open(ui_file, "r") as f:
                         data = json.load(f)
                     
+                    file_age = time.time() - os.path.getmtime(ui_file)
                     update_dashboard_state(dashboard.state, data)
-                    live.update(dashboard._build_layout())
+                    
+                    # Inject file age into a footer or header if possible, 
+                    # but for now let's just update the live display
+                    layout = dashboard._build_layout()
+                    layout["header"].update(Panel(
+                        Text(f"DATA AGE: {file_age:.1f}s", style="bold red" if file_age > 5 else "green"),
+                        title="Sync Status", border_style="red" if file_age > 5 else "green"
+                    ))
+                    live.update(layout)
             except Exception:
                 pass
             await asyncio.sleep(0.25)
