@@ -176,9 +176,9 @@ class BotConfig:
 def load_config(env_path: Optional[str] = None) -> BotConfig:
     """Load BotConfig from .env file. Raises ConfigurationError on failure."""
     if env_path:
-        load_dotenv(env_path)
+        load_dotenv(env_path, override=True)
     else:
-        load_dotenv()
+        load_dotenv(override=True)
 
     cfg = BotConfig(
         POLYMARKET_PRIVATE_KEY=_env_str("POLYMARKET_PRIVATE_KEY", ""),
