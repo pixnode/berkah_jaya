@@ -1,7 +1,8 @@
-# ═══ FILE: btc_sniper/core/claim_manager.py ═══
+# === FILE: btc_sniper/core/claim_manager.py ===
 """
 Claim Manager — auto-claim winning shares via Polymarket Gasless Relayer.
 Retry queue with exponential backoff. Supports paper trading simulation.
+Recognizes SAFE/Gnosis/Proxy wallets for auto-claim.
 """
 
 from __future__ import annotations
@@ -50,10 +51,10 @@ class ClaimManager:
         self._wallet_type: str = "PROXY"
         self._unclaimed_balance: float = 0.0
         self._unclaimed_since: float = 0.0
-        self._clob_client: Optional[ClobClient] = None
-        self._chainlink_feed = None
+        self._clob_client: Optional[object] = None
+        self._chainlink_feed: Optional[object] = None
 
-    def set_chainlink_feed(self, feed):
+    def set_chainlink_feed(self, feed: object) -> None:
         """Inject chainlink feed for paper mode simulation."""
         self._chainlink_feed = feed
 
@@ -84,7 +85,7 @@ class ClaimManager:
 
     @property
     def wallet_type(self) -> str:
-        """Detected wallet type: PROXY, GNOSIS, or EOA."""
+        """Detected wallet type: PROXY or EOA."""
         return self._wallet_type
 
     @property
@@ -95,20 +96,30 @@ class ClaimManager:
     @property
     def unclaimed_since(self) -> float:
         """Seconds since oldest unclaimed balance."""
-        if self._unclaimed_since <= 0: return 0.0
+        if self._unclaimed_since <= 0:
+            return 0.0
         return time.time() - self._unclaimed_since
 
     async def check_wallet_type(self) -> str:
-        """Check wallet type on init. Sets eoa_warning if EOA detected."""
-        proxy_wallet = self._cfg.POLYMARKET_PROXY_WALLET
-        if not proxy_wallet or proxy_wallet == self._cfg.POLYMARKET_PRIVATE_KEY:
-            self._wallet_type = "EOA"
-            self._eoa_warning = True
-            logger.warning("EOA wallet detected — auto-claim NOT supported. Manual claim required.")
-        else:
+        """Check wallet type using POLY_WALLET_TYPE from config.
+        Recognizes: proxy, safe, gnosis → auto-claim enabled.
+        Recognizes: eoa → auto-claim NOT supported.
+        """
+        wallet_type = self._cfg.POLY_WALLET_TYPE.lower().strip()
+
+        if wallet_type in ("proxy", "safe", "gnosis"):
             self._wallet_type = "PROXY"
             self._eoa_warning = False
-            logger.info("Proxy wallet detected — auto-claim enabled.")
+            logger.info("%s wallet detected — auto-claim enabled.", wallet_type.upper())
+        elif wallet_type == "eoa":
+            self._wallet_type = "EOA"
+            self._eoa_warning = True
+            logger.warning("EOA wallet detected — auto-claim NOT supported.")
+        else:
+            self._wallet_type = "EOA"
+            self._eoa_warning = True
+            logger.warning("Unknown wallet type '%s' — defaulting to EOA.", wallet_type)
+
         return self._wallet_type
 
     async def claim(self, window_id: str, order_result: OrderResult) -> ClaimResult:
@@ -123,7 +134,8 @@ class ClaimManager:
             logger.warning("MANUAL_CLAIM_REQUIRED for window %s (EOA wallet)", window_id)
             payout = order_result.shares_bought or 0.0
             self._unclaimed_balance += payout
-            if self._unclaimed_since <= 0: self._unclaimed_since = time.time()
+            if self._unclaimed_since <= 0:
+                self._unclaimed_since = time.time()
             await self._log_event("CLAIM_PENDING_MANUAL", window_id, "EOA wallet manual claim required")
             return ClaimResult("PENDING_MANUAL", window_id, payout, "MANUAL", None, 0, False)
 
@@ -133,7 +145,8 @@ class ClaimManager:
 
         payout = order_result.shares_bought or 0.0
         self._unclaimed_balance += payout
-        if self._unclaimed_since <= 0: self._unclaimed_since = time.time()
+        if self._unclaimed_since <= 0:
+            self._unclaimed_since = time.time()
 
         max_retries = self._cfg.CLAIM_RETRY_MAX
         base_interval = self._cfg.CLAIM_RETRY_INTERVAL_SEC
@@ -143,7 +156,8 @@ class ClaimManager:
                 success = await self._send_redeem(window_id)
                 if success:
                     self._unclaimed_balance = max(0, self._unclaimed_balance - payout)
-                    if self._unclaimed_balance <= 0: self._unclaimed_since = 0.0
+                    if self._unclaimed_balance <= 0:
+                        self._unclaimed_since = 0.0
                     logger.info("Auto-claim successful for %s (attempt %d)", window_id, attempt + 1)
                     await self._log_event("CLAIM_SUCCESS", window_id, f"Auto-claimed ${payout:.4f}")
                     return ClaimResult("AUTO", window_id, payout, "AUTO", time.time(), attempt, False)
@@ -159,7 +173,7 @@ class ClaimManager:
 
     async def _simulate_claim(self, window_id: str, order_result: OrderResult) -> ClaimResult:
         """Simulate claim for paper trading mode."""
-        won = True # Simulation simplification
+        won = True
         payout = order_result.shares_bought if won else 0.0
         logger.info("[PAPER] Claim simulated: %s payout=$%.4f", "WIN" if won else "LOSS", payout)
         return ClaimResult("PAPER", window_id, payout, "PAPER", time.time(), 0, True)
@@ -185,13 +199,22 @@ class ClaimManager:
 
     async def _send_redeem(self, window_id: str) -> bool:
         """Send redeem request via Polymarket Gasless Relayer."""
-        if self._clob_client is None: raise RuntimeError("CLOB client belum diinisialisasi")
+        if self._clob_client is None:
+            raise RuntimeError("CLOB client belum diinisialisasi")
         try:
-            positions = await asyncio.wait_for(asyncio.to_thread(self._clob_client.get_positions), timeout=30)
-            winning = [p for p in positions if getattr(p, "market_id", "") == window_id and float(getattr(p, "size", 0)) > 0]
-            if not winning: return False
+            positions = await asyncio.wait_for(
+                asyncio.to_thread(self._clob_client.get_positions), timeout=30
+            )
+            winning = [
+                p for p in positions
+                if getattr(p, "market_id", "") == window_id and float(getattr(p, "size", 0)) > 0
+            ]
+            if not winning:
+                return False
             position_ids = [getattr(p, "position_id", "") for p in winning]
-            await asyncio.wait_for(asyncio.to_thread(self._clob_client.redeem_positions, position_ids), timeout=30)
+            await asyncio.wait_for(
+                asyncio.to_thread(self._clob_client.redeem_positions, position_ids), timeout=30
+            )
             return True
         except Exception as exc:
             logger.warning("Redeem failed: %s", exc)
@@ -208,6 +231,9 @@ class ClaimManager:
         if self._event_logger is not None and hasattr(self._event_logger, "log_event"):
             try:
                 from logs.audit_logger import EventRecord
-                record = EventRecord(time.time(), event_type, window_id, "claim_manager", "", details, None, "{}")
+                record = EventRecord(
+                    time.time(), event_type, window_id, "claim_manager", "", details, None, "{}"
+                )
                 await self._event_logger.log_event(record)
-            except Exception: pass
+            except Exception:
+                pass

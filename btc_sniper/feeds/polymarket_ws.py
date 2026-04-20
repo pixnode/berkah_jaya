@@ -1,7 +1,8 @@
-# ═══ FILE: btc_sniper/feeds/polymarket_ws.py ═══
+# === FILE: btc_sniper/feeds/polymarket_ws.py ===
 """
 Polymarket CLOB WebSocket Feed — streams order book and odds data.
 Emits OrderBookEvent and OddsEvent to the shared asyncio.Queue.
+Auto-subscribes to the active window on first connect.
 """
 
 from __future__ import annotations
@@ -20,8 +21,6 @@ from feeds import DataStaleEvent, OddsEvent, OrderBookEvent
 
 logger = logging.getLogger("btc_sniper.feeds.polymarket")
 
-# Global definitions removed as part of Iteration 10. Connection endpoints are now stored in BotConfig.
-
 
 class PolymarketFeed:
     """WebSocket client for Polymarket CLOB order book and odds feed."""
@@ -35,8 +34,7 @@ class PolymarketFeed:
         self._running: bool = False
         self._reconnect_count: int = 0
         self._queue: Optional[asyncio.Queue] = None
-        self._current_market_slug: Optional[str] = None
-        self._subscribed: bool = False
+        self._current_slug: Optional[str] = None
 
     @property
     def is_connected(self) -> bool:
@@ -44,29 +42,36 @@ class PolymarketFeed:
         return self._connected
 
     @property
+    def is_subscribed(self) -> bool:
+        """Whether the feed is subscribed to a market slug."""
+        return self._current_slug is not None
+
+    @property
     def last_message_at(self) -> float:
-        """Unix timestamp of the last received message."""
+        """Unix timestamp of the last received message.
+        Returns current time if not yet subscribed (= not stale)."""
+        if not self.is_subscribed:
+            return time.time()
         return self._last_message_at
 
     async def subscribe(self, market_slug: str) -> None:
         """Subscribe to a specific market window slug."""
-        self._current_market_slug = market_slug
+        self._current_slug = market_slug
         if self._ws is not None and self._connected:
             await self._send_subscribe(market_slug)
 
     async def unsubscribe(self) -> None:
         """Unsubscribe from the current market."""
-        if self._ws is not None and self._connected and self._current_market_slug:
+        if self._ws is not None and self._connected and self._current_slug:
             try:
                 await self._ws.send(json.dumps({
                     "type": "unsubscribe",
-                    "market": self._current_market_slug,
+                    "market": self._current_slug,
                 }))
-                logger.info("Unsubscribed from Polymarket market: %s", self._current_market_slug)
+                logger.info("Unsubscribed from Polymarket market: %s", self._current_slug)
             except Exception as exc:
                 logger.warning("Failed to unsubscribe: %s", exc)
-        self._subscribed = False
-        self._current_market_slug = None
+        self._current_slug = None
 
     async def start(self, queue: asyncio.Queue) -> None:
         """Start the feed — connect and begin streaming to queue."""
@@ -80,7 +85,7 @@ class PolymarketFeed:
             except websockets.exceptions.ConnectionClosed as exc:
                 logger.warning("Polymarket WS connection closed: %s", exc)
                 self._connected = False
-                self._subscribed = False
+                self._current_slug = None
                 if not self._running:
                     break
                 await self._reconnect_with_backoff()
@@ -90,7 +95,7 @@ class PolymarketFeed:
             except Exception as exc:
                 logger.error("Polymarket WS unexpected error: %s", exc, exc_info=True)
                 self._connected = False
-                self._subscribed = False
+                self._current_slug = None
                 if not self._running:
                     break
                 await self._reconnect_with_backoff()
@@ -107,7 +112,7 @@ class PolymarketFeed:
             except Exception:
                 pass
         self._connected = False
-        self._subscribed = False
+        self._current_slug = None
 
     async def _connect_and_stream(self) -> None:
         """Establish connection and process messages."""
@@ -128,9 +133,12 @@ class PolymarketFeed:
 
             await self._log_event("WS_RECONNECT", "polymarket", "connected", 0)
 
-            # Re-subscribe if we had an active market
-            if self._current_market_slug:
-                await self._send_subscribe(self._current_market_slug)
+            # Auto-subscribe to the active window on first connect
+            now = int(time.time())
+            window_start = now - (now % 300)
+            initial_slug = f"btc-updown-5m-{window_start}"
+            await self.subscribe(initial_slug)
+            logger.info("Polymarket: auto-subscribed to initial window %s", initial_slug)
 
             # Start heartbeat
             heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws))
@@ -158,11 +166,10 @@ class PolymarketFeed:
                 "market": market_slug,
                 "channel": "book",
             }))
-            self._subscribed = True
             logger.info("Subscribed to Polymarket market: %s", market_slug)
         except Exception as exc:
             logger.error("Failed to subscribe to %s: %s", market_slug, exc)
-            self._subscribed = False
+            self._current_slug = None
 
     async def _heartbeat_loop(self, ws: websockets.WebSocketClientProtocol) -> None:
         """Send periodic pings and check for pong responses."""
@@ -205,20 +212,16 @@ class PolymarketFeed:
         elif msg_type == "price_change" or event_type == "price_change":
             await self._handle_price_change(data)
         elif msg_type == "tick_size_change":
-            pass  # Informational, no action needed
+            pass
         elif msg_type == "error":
             logger.error("Polymarket WS error: %s", data.get("message", "unknown"))
 
     async def _handle_book_update(self, data: dict) -> None:
         """Parse order book update and emit OrderBookEvent."""
         try:
-            market = data.get("market", data.get("asset_id", ""))
             bids = data.get("bids", [])
             asks = data.get("asks", [])
 
-            # Extract best bid/ask for UP and DOWN tokens
-            # Polymarket structure: each market has two outcome tokens
-            # We parse the top-of-book for each side
             up_ask = 0.0
             up_bid = 0.0
             down_ask = 0.0
@@ -229,11 +232,9 @@ class PolymarketFeed:
             if bids:
                 up_bid = float(bids[0].get("price", bids[0].get("px", 0)))
 
-            # DOWN is complement: if UP ask = 0.70, DOWN bid ≈ 0.30
             down_bid = round(1.0 - up_ask, 4) if up_ask > 0 else 0.0
             down_ask = round(1.0 - up_bid, 4) if up_bid > 0 else 0.0
 
-            # Spread calculation
             mid = (up_ask + up_bid) / 2.0 if (up_ask > 0 and up_bid > 0) else 1.0
             spread_pct = ((up_ask - up_bid) / mid * 100.0) if mid > 0 else 0.0
 
@@ -248,12 +249,7 @@ class PolymarketFeed:
             )
             await self._emit(book_event)
 
-            # Also emit OddsEvent with current odds
-            odds_event = OddsEvent(
-                timestamp=now,
-                up_odds=up_ask,
-                down_odds=down_ask,
-            )
+            odds_event = OddsEvent(timestamp=now, up_odds=up_ask, down_odds=down_ask)
             await self._emit(odds_event)
 
         except (KeyError, ValueError, TypeError, IndexError) as exc:
@@ -267,24 +263,16 @@ class PolymarketFeed:
             now = time.time()
 
             if side in ("yes", "up"):
-                odds_event = OddsEvent(
-                    timestamp=now,
-                    up_odds=price,
-                    down_odds=round(1.0 - price, 4),
-                )
+                odds_event = OddsEvent(timestamp=now, up_odds=price, down_odds=round(1.0 - price, 4))
             else:
-                odds_event = OddsEvent(
-                    timestamp=now,
-                    up_odds=round(1.0 - price, 4),
-                    down_odds=price,
-                )
+                odds_event = OddsEvent(timestamp=now, up_odds=round(1.0 - price, 4), down_odds=price)
             await self._emit(odds_event)
 
         except (KeyError, ValueError, TypeError) as exc:
             logger.debug("Polymarket: failed to parse price change: %s", exc)
 
     async def _emit(self, event: object) -> None:
-        """Put event into the queue. Log warning if queue is full."""
+        """Put event into the queue."""
         if self._queue is None:
             return
         try:
@@ -337,7 +325,7 @@ class PolymarketFeed:
                 record = EventRecord(
                     timestamp=time.time(),
                     event_type=event_type,
-                    window_id=self._current_market_slug or "",
+                    window_id=self._current_slug or "",
                     trigger=source,
                     mode="",
                     details=details,

@@ -1,12 +1,13 @@
-# ═══ FILE: btc_sniper/risk/safety_monitor.py ═══
+# === FILE: btc_sniper/risk/safety_monitor.py ===
 """
 Safety Monitor — continuous background monitoring loop (every 0.5s).
-Evaluates 10 safety triggers and emits SKIP/LOCKDOWN/CANCEL events.
+Evaluates safety triggers and emits SKIP/LOCKDOWN/CANCEL events.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -29,7 +30,7 @@ class SafetyEvent:
 
 
 class SafetyMonitor:
-    """Runs a 0.5s monitoring loop checking 10 safety triggers."""
+    """Runs a 0.5s monitoring loop checking safety triggers."""
 
     def __init__(self, cfg: BotConfig, event_logger: Optional[object] = None) -> None:
         self._cfg = cfg
@@ -37,8 +38,6 @@ class SafetyMonitor:
         self._running: bool = False
         self._last_safety_event: Optional[SafetyEvent] = None
 
-        self._start_time = time.time()
-        
         # References to shared state — set by engine before start
         self._hl_feed: Optional[object] = None
         self._poly_feed: Optional[object] = None
@@ -75,18 +74,16 @@ class SafetyMonitor:
         self._engine_state = state
 
     async def run(self) -> None:
-        """Main monitoring loop — runs every 0.5 seconds."""
+        """Main monitoring loop — enters grace period then checks every 0.5s."""
         self._running = True
-        logger.info("SafetyMonitor starting up — entering %ds grace period...", self._cfg.SAFETY_MONITOR_STARTUP_GRACE_SEC)
-        
-        # Wait for feeds to stabilize before starting monitoring
-        await asyncio.sleep(self._cfg.SAFETY_MONITOR_STARTUP_GRACE_SEC)
-        
+        grace = self._cfg.SAFETY_MONITOR_STARTUP_GRACE_SEC
+        logger.info("SafetyMonitor starting up — entering %ds grace period...", grace)
+        await asyncio.sleep(grace)
         logger.info("SafetyMonitor active — checking every 0.5s.")
 
         try:
             while self._running:
-                await self._check_all_triggers()
+                await self._check_all()
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
             logger.info("SafetyMonitor cancelled.")
@@ -98,23 +95,19 @@ class SafetyMonitor:
         """Stop the monitor."""
         self._running = False
 
-    async def _check_all_triggers(self) -> None:
+    async def _check_all(self) -> None:
         """Evaluate all safety triggers."""
         now = time.time()
         window_id = ""
         if self._engine_state:
             window_id = self._engine_state.get("window_id", "")
 
-        # Skip checks if circuit breaker is already in LOCKDOWN
+        # Skip if circuit breaker is already in LOCKDOWN
         if self._circuit_breaker and hasattr(self._circuit_breaker, "is_lockdown"):
             if self._circuit_breaker.is_lockdown:
                 return
 
-        # ── STARTUP GRACE PERIOD ──
-        if now - self._start_time < self._cfg.SAFETY_MONITOR_STARTUP_GRACE_SEC:
-            return
-
-        # ── TRIGGER 1: DATA_STALE (Hyperliquid) ──
+        # ── TRIGGER 1: DATA_STALE (Hyperliquid) ──────
         if self._hl_feed and hasattr(self._hl_feed, "last_message_at"):
             hl_age = now - self._hl_feed.last_message_at if self._hl_feed.last_message_at > 0 else 999
             if hl_age > self._cfg.WS_STALE_THRESHOLD_SEC:
@@ -126,31 +119,32 @@ class SafetyMonitor:
                     await self._circuit_breaker.trigger_lockdown("DATA_STALE")
                 return
 
-        # ── TRIGGER 2: DATA_STALE (Polymarket) ──
-        if self._poly_feed and hasattr(self._poly_feed, "last_message_at"):
-            poly_age = now - self._poly_feed.last_message_at if self._poly_feed.last_message_at > 0 else 999
-            if poly_age > self._cfg.WS_STALE_THRESHOLD_SEC:
-                await self._emit_event(
-                    "DATA_STALE", "LOCKDOWN", window_id,
-                    f"Polymarket no update for {poly_age:.1f}s > {self._cfg.WS_STALE_THRESHOLD_SEC}s",
-                )
-                if self._circuit_breaker and hasattr(self._circuit_breaker, "trigger_lockdown"):
-                    await self._circuit_breaker.trigger_lockdown("DATA_STALE")
-                return
+        # ── TRIGGER 2: DATA_STALE (Polymarket) ────────
+        # GUARD: Only check if Polymarket is subscribed to a market
+        if self._poly_feed and hasattr(self._poly_feed, "is_subscribed"):
+            if self._poly_feed.is_subscribed:
+                poly_age = now - self._poly_feed.last_message_at if self._poly_feed.last_message_at > 0 else 999
+                if poly_age > self._cfg.WS_STALE_THRESHOLD_SEC:
+                    await self._emit_event(
+                        "DATA_STALE", "LOCKDOWN", window_id,
+                        f"Polymarket no update for {poly_age:.1f}s > {self._cfg.WS_STALE_THRESHOLD_SEC}s",
+                    )
+                    if self._circuit_breaker and hasattr(self._circuit_breaker, "trigger_lockdown"):
+                        await self._circuit_breaker.trigger_lockdown("DATA_STALE")
+                    return
+            # If not subscribed: skip — this is normal during startup
 
-        # ── TRIGGER 3: CHAINLINK_UNSTABLE ──
+        # ── TRIGGER 3: CHAINLINK_UNSTABLE ─────────────
         if self._chainlink_feed and hasattr(self._chainlink_feed, "last_event"):
             cl_event = self._chainlink_feed.last_event
             if cl_event is not None:
                 self._chainlink_ticks.append(cl_event.price)
-                # Keep last 3 ticks
                 if len(self._chainlink_ticks) > 3:
                     self._chainlink_ticks = self._chainlink_ticks[-3:]
 
                 if len(self._chainlink_ticks) >= 3:
                     volatility = abs(self._chainlink_ticks[0] - self._chainlink_ticks[2])
                     if volatility > self._cfg.CHAINLINK_VOLATILITY_SKIP_USD:
-                        # Check if gap is > 2x threshold (HIGH_VOL_SKIP)
                         gap = 0.0
                         gap_threshold = self._cfg.GAP_THRESHOLD_DEFAULT
                         if self._signal_processor and hasattr(self._signal_processor, "state"):
@@ -160,7 +154,7 @@ class SafetyMonitor:
                         if gap > 2 * gap_threshold:
                             await self._emit_event(
                                 "HIGH_VOL_SKIP", "SKIP", window_id,
-                                f"Chainlink volatility ${volatility:.1f} but gap ${gap:.1f} > 2×threshold — still SKIP for safety",
+                                f"Chainlink volatility ${volatility:.1f} but gap ${gap:.1f} > 2×threshold — SKIP",
                             )
                         else:
                             await self._emit_event(
@@ -168,7 +162,7 @@ class SafetyMonitor:
                                 f"3-tick volatility ${volatility:.1f} > ${self._cfg.CHAINLINK_VOLATILITY_SKIP_USD:.1f}",
                             )
 
-        # ── TRIGGER 4: SYNC_LATENCY ──
+        # ── TRIGGER 4: SYNC_LATENCY ───────────────────
         if (
             self._hl_feed and hasattr(self._hl_feed, "last_message_at")
             and self._poly_feed and hasattr(self._poly_feed, "last_message_at")
@@ -186,7 +180,7 @@ class SafetyMonitor:
                         await self._circuit_breaker.trigger_lockdown("SYNC_LATENCY")
                     return
 
-        # ── TRIGGER 5: STRIKE_PRICE_STALE ──
+        # ── TRIGGER 5: STRIKE_PRICE_STALE ─────────────
         if self._chainlink_feed and hasattr(self._chainlink_feed, "last_event"):
             cl_event = self._chainlink_feed.last_event
             if cl_event is not None:
@@ -200,7 +194,7 @@ class SafetyMonitor:
                         f"Chainlink age {cl_event.age_seconds}s > {self._cfg.CHAINLINK_MAX_AGE_SEC}s at INIT",
                     )
 
-        # ── TRIGGER 6: ODDS_OUT_OF_RANGE (backup check) ──
+        # ── TRIGGER 6: ODDS_OUT_OF_RANGE (backup) ─────
         if self._signal_processor and hasattr(self._signal_processor, "latest_odds"):
             odds = self._signal_processor.latest_odds
             if odds is not None:
@@ -242,11 +236,9 @@ class SafetyMonitor:
             mode, trigger, details, window_id,
         )
 
-        # Log to event_log
         if self._event_logger is not None and hasattr(self._event_logger, "log_event"):
             try:
                 from logs.audit_logger import EventRecord
-                import json
                 record = EventRecord(
                     timestamp=event.timestamp,
                     event_type=trigger,
