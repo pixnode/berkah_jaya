@@ -406,9 +406,12 @@ class BotEngine:
                     elif isinstance(obj, dict): return {k: d_to_dict(v) for k, v in obj.items()}
                     else: return obj
                 state_dict = d_to_dict(self._dashboard.state)
-                with open(ui_file, "w") as f: json.dump(state_dict, f)
+                temp_file = ui_file + ".tmp"
+                with open(temp_file, "w") as f:
+                    json.dump(state_dict, f)
+                os.replace(temp_file, ui_file)
             except Exception: pass
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
 
     async def _periodic_state_flush(self) -> None:
         while not self._shutdown.is_set():
