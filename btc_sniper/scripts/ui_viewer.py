@@ -27,31 +27,32 @@ from cli.dashboard import Dashboard, DashboardState, TradeHistoryEntry
 from config import load_config
 
 async def run_viewer():
-    cfg = load_config()
-    ui_file = os.path.join(cfg.OUTPUT_DIR, "dashboard_ui.json")
+    # Force loading .env from the parent (root) directory
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    env_path = os.path.join(root_dir, ".env")
+    cfg = load_config(env_path if os.path.exists(env_path) else None)
+    
+    ui_file = os.path.join(root_dir, cfg.OUTPUT_DIR.lstrip("./"), "dashboard_ui.json")
     
     if not os.path.exists(ui_file):
         print(f"Error: UI State file not found at {ui_file}")
-        print("Make sure the bot is running via PM2.")
+        print("Make sure the bot is running and writing to this location.")
         return
 
-    # Use existing Dashboard class but override run to be read-only
     dashboard = Dashboard(cfg)
     
-    def dict_to_state(data: dict) -> DashboardState:
+    def update_dashboard_state(target_state, source_data):
         # Convert trade history
         history = []
-        for h in data.get("trade_history", []):
+        for h in source_data.get("trade_history", []):
             history.append(TradeHistoryEntry(**h))
         
-        # Create state
-        state = DashboardState()
-        for k, v in data.items():
+        # Update fields on existing state object
+        for k, v in source_data.items():
             if k == "trade_history":
-                state.trade_history = history
-            elif hasattr(state, k):
-                setattr(state, k, v)
-        return state
+                target_state.trade_history = history
+            elif hasattr(target_state, k):
+                setattr(target_state, k, v)
 
     print("Connecting to Bot UI Stream...")
     
@@ -62,9 +63,7 @@ async def run_viewer():
                     with open(ui_file, "r") as f:
                         data = json.load(f)
                     
-                    new_state = dict_to_state(data)
-                    # Update current dashboard state
-                    dashboard._state = new_state
+                    update_dashboard_state(dashboard.state, data)
                     live.update(dashboard._build_layout())
             except Exception:
                 pass
