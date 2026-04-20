@@ -91,6 +91,7 @@ class ChainlinkFeed:
                 if event is not None:
                     self._last_event = event
                     self._consecutive_failures = 0
+                    logger.debug(f"Chainlink: Polled price ${event.price:.2f} (Age: {event.age_seconds}s)")
                     await self._emit(event)
                 else:
                     self._consecutive_failures += 1

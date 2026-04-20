@@ -172,8 +172,12 @@ class SignalProcessor:
 
         elif isinstance(event, ChainlinkEvent):
             self._latest_chainlink = event
-            self._state.strike_price = event.price
-            self._update_gap()
+            if event.price > 0:
+                self._state.strike_price = event.price
+                self._update_gap()
+                logger.debug(f"SignalProcessor: Strike updated to ${event.price:.2f}")
+            else:
+                logger.warning("SignalProcessor: Received zero price from Chainlink")
 
         elif isinstance(event, OrderBookEvent):
             self._latest_book = event
