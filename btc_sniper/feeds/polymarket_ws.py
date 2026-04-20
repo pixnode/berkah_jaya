@@ -57,6 +57,7 @@ class PolymarketFeed:
     async def subscribe(self, market_slug: str) -> None:
         """Subscribe to a specific market window slug."""
         self._current_slug = market_slug
+        self._last_message_at = time.time()  # Reset stale timer on subscribe
         if self._ws is not None and self._connected:
             await self._send_subscribe(market_slug)
 

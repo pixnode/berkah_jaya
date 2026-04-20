@@ -1,9 +1,7 @@
 {
-  "window_id": "btc-updown-5m-1776622800",
-  "t_remaining": 32,
+  "window_id": "btc-updown-5m-1776669900",
+  "t_remaining": 194,
   "bot_mode": "INIT",
-  "session_id": "2026-04-19-182428",
-  "order_sent": false,
-  "_last_flush": "2026-04-19 18:39:26.889",
+  "_last_flush": "2026-04-20 07:26:46.253",
   "_bot_version": "2.3"
 }
