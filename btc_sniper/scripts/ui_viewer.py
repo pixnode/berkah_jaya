@@ -69,13 +69,6 @@ async def run_viewer():
                     update_dashboard_state(dashboard.state, data)
                     
                     layout = dashboard._build_layout()
-                    # Add a prominent sync status panel
-                    layout["header"].update(Panel(
-                        Text(f"SINKRONISASI AKTIF | FILE AGE: {file_age:.1f}s", 
-                             style="bold green" if file_age < 3 else "bold red"),
-                        title="[Bot Status]", 
-                        border_style="green" if file_age < 3 else "red"
-                    ))
                     live.update(layout)
                 else:
                     live.update(Panel(Text(f"Mencari file: {ui_file}...", style="yellow")))

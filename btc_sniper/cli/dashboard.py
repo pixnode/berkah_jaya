@@ -276,6 +276,12 @@ class Dashboard:
         line2.append(f"  │  Balance: ${s.balance:.2f}", style="green")
         line2.append(f"  │  Unclaimed: ${s.unclaimed:.2f}", style="yellow" if s.unclaimed > 0 else "dim")
 
+        # Sync indicators
+        cl_color = "green" if s.chainlink_age_sec < self._cfg.CHAINLINK_MAX_AGE_SEC else "red"
+        py_color = "green" if s.poly_sync_latency_sec < self._cfg.POLY_STALE_THRESHOLD_SEC else "red"
+        line2.append(f"  │  CL: {s.chainlink_age_sec:.1f}s", style=cl_color)
+        line2.append(f"  │  PY: {s.poly_sync_latency_sec:.1f}s", style=py_color)
+
         if s.is_lockdown:
             line2.append(f"  │  LOCKDOWN: {s.lockdown_reason}", style="bold red")
 
