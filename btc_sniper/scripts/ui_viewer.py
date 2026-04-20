@@ -66,17 +66,22 @@ async def run_viewer():
                     file_age = time.time() - os.path.getmtime(ui_file)
                     update_dashboard_state(dashboard.state, data)
                     
-                    # Inject file age into a footer or header if possible, 
-                    # but for now let's just update the live display
                     layout = dashboard._build_layout()
+                    # Add a prominent sync status panel
                     layout["header"].update(Panel(
-                        Text(f"DATA AGE: {file_age:.1f}s", style="bold red" if file_age > 5 else "green"),
-                        title="Sync Status", border_style="red" if file_age > 5 else "green"
+                        Text(f"SINKRONISASI AKTIF | FILE AGE: {file_age:.1f}s", 
+                             style="bold green" if file_age < 3 else "bold red"),
+                        title="[Bot Status]", 
+                        border_style="green" if file_age < 3 else "red"
                     ))
                     live.update(layout)
-            except Exception:
-                pass
-            await asyncio.sleep(0.25)
+                else:
+                    live.update(Panel(Text(f"Mencari file: {ui_file}...", style="yellow")))
+            except Exception as e:
+                # Tampilkan error di layar jika terjadi masalah pembacaan
+                live.update(Panel(Text(f"ERROR SINKRONISASI: {str(e)}", style="bold white on red")))
+            
+            await asyncio.sleep(0.5)
 
 if __name__ == "__main__":
     try:
