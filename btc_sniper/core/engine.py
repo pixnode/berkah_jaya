@@ -28,7 +28,10 @@ class BotEngine:
         self._tasks: Set[asyncio.Task] = set()
         self._session_id = f"SES-{int(time.time())}"
         self._order_sent = False
-        self._stopping = False  # Flag to prevent redundant stop calls
+        self._stopping = False
+
+        # Ensure output directory exists
+        os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
 
         # State for monitoring
         self._engine_state = {"window_id": "—", "t_remaining": 0, "bot_mode": "INIT"}
@@ -44,9 +47,6 @@ class BotEngine:
         from risk.safety_monitor import SafetyMonitor
         from cli.dashboard import Dashboard
         from core.order_executor import OrderExecutor
-
-        # Ensure output directory exists
-        os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
 
         self._audit_logger = AuditLogger(cfg)
         self._hl_feed = HyperliquidFeed(cfg, self._audit_logger)
@@ -129,7 +129,7 @@ class BotEngine:
             # Mode selection
             if t_rem > self._cfg.GOLDEN_WINDOW_START:
                 mode = "INIT"
-            elif t_rem > 48: # ARMED is the buffer before execution
+            elif t_rem > 48:
                 mode = "ARMED"
             elif t_rem >= self._cfg.GOLDEN_WINDOW_END:
                 mode = "EXECUTE"
@@ -139,7 +139,6 @@ class BotEngine:
             self._engine_state["bot_mode"] = mode
             self._dashboard.state.bot_mode = mode
 
-            # Reset order flag on new window
             if t_rem > 295: self._order_sent = False
 
             # Update dashboard state from components
@@ -185,7 +184,7 @@ class BotEngine:
                     time_str=datetime.now().strftime("%H:%M:%S"),
                     result="OPEN", side=order_res.side or "",
                     odds=order_res.entry_odds or 0, gap=self._signal_processor.state.gap,
-                    cvd_pct=0, velocity=self._signal_processor.state.velocity,
+                    cvd_pct=0, velocity=self._signal_processor.state.velocity_1_5s,
                     spread=0, slippage=order_res.slippage_delta, claim="WAIT"
                 )
                 self._dashboard.state.trade_history.append(entry)
@@ -213,30 +212,33 @@ class BotEngine:
             self._dashboard.state.total_pnl -= (order_res.cost_usd or 0)
 
     def _sync_dashboard(self):
-        """Sync component states to dashboard."""
+        """Sync component states to dashboard (PRD v2.3 compliant fields)."""
         ds = self._dashboard.state
         ss = self._signal_processor.state
         
-        ds.hl_price = ss.hl_price
+        # Panel B: Price & Gap
+        ds.hl_price = ss.current_hl_price
         ds.strike_price = ss.strike_price
         ds.gap = ss.gap
         ds.gap_direction = ss.gap_direction
         ds.gap_threshold = ss.gap_threshold
-        ds.velocity = ss.velocity
+        ds.velocity = ss.velocity_1_5s
         ds.atr = ss.atr
         ds.vol_regime = ss.vol_regime
         
-        ds.buy_volume = ss.buy_volume
-        ds.sell_volume = ss.sell_volume
-        ds.cvd_net = ss.cvd_net
-        ds.avg_vol_per_min = ss.avg_vol_per_min
+        # Panel C: CVD
+        ds.buy_volume = ss.buy_volume_60s
+        ds.sell_volume = ss.sell_volume_60s
+        ds.cvd_net = ss.cvd_60s
+        ds.avg_vol_per_min = ss.avg_volume_per_min
         ds.cvd_threshold = ss.cvd_threshold
         ds.cvd_aligned = ss.cvd_aligned
         ds.cvd_direction = ss.cvd_direction
         
+        # Panel D: Order Book (Odds)
         if ss.latest_odds:
             ds.up_ask = ss.latest_odds.up_odds
-            ds.up_bid = ss.latest_odds.up_odds - 0.01 # Mock
+            ds.up_bid = ss.latest_odds.up_odds - 0.01
             ds.down_ask = ss.latest_odds.down_odds
             ds.down_bid = ss.latest_odds.down_odds - 0.01
             
@@ -251,7 +253,6 @@ class BotEngine:
         logger.info("Stopping engine...")
         self._shutdown.set()
         
-        # Stop components with sessions
         await self._hl_feed.stop()
         await self._poly_feed.stop()
         await self._chainlink_feed.stop()
@@ -260,7 +261,6 @@ class BotEngine:
         await self._order_executor.stop()
         await self._claim_manager.stop()
         
-        # Cancel all tasks
         for t in self._tasks:
             t.cancel()
         

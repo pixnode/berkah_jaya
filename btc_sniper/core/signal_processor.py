@@ -34,7 +34,7 @@ class Candle:
 
 @dataclass
 class SignalState:
-    """Snapshot of all signal values at a point in time."""
+    """Snapshot of all signal values at a point in time (PRD v2.3 compliant)."""
     timestamp: float = 0.0
     current_hl_price: float = 0.0
     strike_price: float = 0.0
@@ -49,7 +49,11 @@ class SignalState:
     avg_volume_per_min: float = 0.0
     cvd_aligned: bool = False
     cvd_direction: Literal["UP", "DOWN", "MIXED"] = "MIXED"
-    velocity: float = 0.0
+    velocity_1_5s: float = 0.0
+    velocity_pass: bool = False
+    # Additional fields for dashboard sync
+    buy_volume_60s: float = 0.0
+    sell_volume_60s: float = 0.0
 
 
 class SignalProcessor:
@@ -63,9 +67,11 @@ class SignalProcessor:
         self._cvd_deque: Deque[tuple[float, float]] = collections.deque()
         self._cvd_running: float = 0.0  # O(1) running total
         
-        # Volume tracking for avg_volume_per_min
-        self._volume_deque: Deque[tuple[float, float]] = collections.deque()
-        self._volume_running: float = 0.0  # O(1) running total
+        # Volume tracking (split for dashboard)
+        self._buy_deque: Deque[tuple[float, float]] = collections.deque()
+        self._sell_deque: Deque[tuple[float, float]] = collections.deque()
+        self._buy_running: float = 0.0
+        self._sell_running: float = 0.0
 
         # ── Velocity tracking ─────────────────────────
         self._velocity_deque: Deque[tuple[float, float]] = collections.deque()
@@ -130,30 +136,25 @@ class SignalProcessor:
             self._state.timestamp = now
             self._state.current_hl_price = event.price
             self._update_gap()
-            # Update velocity deque
             self._velocity_deque.append((now, event.price))
-            # Clean old velocity data (> 5s)
             while self._velocity_deque and now - self._velocity_deque[0][0] > 5.0:
                 self._velocity_deque.popleft()
-            
-            # Update current candle
             self._update_candle(event.price, 0)
 
         elif isinstance(event, TradeEvent):
-            # Noise filter
             if event.size_usd < self._cfg.MIN_TRADE_SIZE_USD:
                 return
-                
-            # Add to rolling CVD window (processed in background)
             delta = event.size_usd if event.side == "BUY" else -event.size_usd
             self._cvd_deque.append((now, delta))
             self._cvd_running += delta
             
-            # Add to volume window
-            self._volume_deque.append((now, event.size_usd))
-            self._volume_running += event.size_usd
+            if event.side == "BUY":
+                self._buy_deque.append((now, event.size_usd))
+                self._buy_running += event.size_usd
+            else:
+                self._sell_deque.append((now, event.size_usd))
+                self._sell_running += event.size_usd
             
-            # Update current candle volume
             self._update_candle(event.price, event.size_usd)
 
         elif isinstance(event, ChainlinkEvent):
@@ -179,21 +180,15 @@ class SignalProcessor:
                 self._state.gap_direction = "NEUTRAL"
 
     def _update_candle(self, price: float, volume: float) -> None:
-        """Update 5m candle for ATR calculation."""
         now = time.time()
-        # Align to 5m window
         window_start = now - (now % 300)
-        
         if window_start != self._current_candle_start:
-            # New candle starts
             if self._current_candle:
                 self._candle_deque.append(self._current_candle)
                 self._update_atr()
-            
             self._current_candle = Candle(window_start, price, price, price, price, volume)
             self._current_candle_start = window_start
         else:
-            # Update existing candle
             c = self._current_candle
             c.high = max(c.high, price)
             c.low = min(c.low, price)
@@ -201,20 +196,13 @@ class SignalProcessor:
             c.volume += volume
 
     def _update_atr(self) -> None:
-        """Calculate ATR and set volume regime."""
-        if len(self._candle_deque) < 2:
-            return
-            
+        if len(self._candle_deque) < 2: return
         ranges = []
         for i in range(1, len(self._candle_deque)):
-            c1 = self._candle_deque[i-1]
-            c2 = self._candle_deque[i]
+            c1 = self._candle_deque[i-1]; c2 = self._candle_deque[i]
             tr = max(c2.high - c2.low, abs(c2.high - c1.close), abs(c2.low - c1.close))
             ranges.append(tr)
-            
         self._state.atr = sum(ranges) / len(ranges)
-        
-        # Determine regime
         if self._state.atr > self._cfg.ATR_HIGH_THRESHOLD:
             self._state.vol_regime = "HIGH"
             self._state.gap_threshold = self._cfg.GAP_THRESHOLD_HIGH
@@ -226,26 +214,21 @@ class SignalProcessor:
             self._state.gap_threshold = self._cfg.GAP_THRESHOLD_NORMAL
 
     async def _background_calculations(self) -> None:
-        """Tier 2: Periodic CVD and Velocity calculations (500ms)."""
         interval = self._cfg.CVD_CALC_INTERVAL_MS / 1000.0
-        
         while self._running:
             try:
                 now = time.time()
-                
-                # 1. Purge old CVD data (> 60s)
                 while self._cvd_deque and now - self._cvd_deque[0][0] > 60.0:
-                    _, delta = self._cvd_deque.popleft()
-                    self._cvd_running -= delta
+                    _, delta = self._cvd_deque.popleft(); self._cvd_running -= delta
+                while self._buy_deque and now - self._buy_deque[0][0] > 60.0:
+                    _, vol = self._buy_deque.popleft(); self._buy_running -= vol
+                while self._sell_deque and now - self._sell_deque[0][0] > 60.0:
+                    _, vol = self._sell_deque.popleft(); self._sell_running -= vol
                 
-                # 2. Purge old volume data (> 60s)
-                while self._volume_deque and now - self._volume_deque[0][0] > 60.0:
-                    _, vol = self._volume_deque.popleft()
-                    self._volume_running -= vol
-                
-                # 3. Update CVD state
                 self._state.cvd_60s = self._cvd_running
-                self._state.avg_volume_per_min = self._volume_running
+                self._state.buy_volume_60s = self._buy_running
+                self._state.sell_volume_60s = self._sell_running
+                self._state.avg_volume_per_min = self._buy_running + self._sell_running
                 self._state.cvd_threshold = self._state.avg_volume_per_min * (self._state.cvd_threshold_pct / 100.0)
                 
                 if abs(self._state.cvd_60s) >= self._state.cvd_threshold:
@@ -255,18 +238,10 @@ class SignalProcessor:
                     self._state.cvd_aligned = False
                     self._state.cvd_direction = "MIXED"
                 
-                # 4. Calculate Velocity ($/5s)
-                if len(self._velocity_deque) >= 2:
-                    self._state.velocity = self._velocity_deque[-1][1] - self._velocity_deque[0][1]
-                else:
-                    self._state.velocity = 0.0
+                v_window = getattr(self._cfg, "VELOCITY_WINDOW_SECONDS", 1.5)
+                v_data = [p for t, p in self._velocity_deque if now - t <= v_window]
+                self._state.velocity_1_5s = v_data[-1] - v_data[0] if len(v_data) >= 2 else 0.0
+                self._state.velocity_pass = abs(self._state.velocity_1_5s) >= getattr(self._cfg, "VELOCITY_MIN_DELTA", 15.0)
 
-                # 5. Log Snapshot (Optional)
-                if self._event_logger and hasattr(self._event_logger, "log_snapshot"):
-                    # We will implement this if needed for audit
-                    pass
-
-            except Exception as exc:
-                logger.error("Error in background calculations: %s", exc)
-                
+            except Exception as exc: logger.error("Error in background calculations: %s", exc)
             await asyncio.sleep(interval)
