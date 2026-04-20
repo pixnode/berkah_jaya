@@ -236,11 +236,12 @@ class BotEngine:
         ds.cvd_direction = ss.cvd_direction
         
         # Panel D: Order Book (Odds)
-        if ss.latest_odds:
-            ds.up_ask = ss.latest_odds.up_odds
-            ds.up_bid = ss.latest_odds.up_odds - 0.01
-            ds.down_ask = ss.latest_odds.down_odds
-            ds.down_bid = ss.latest_odds.down_odds - 0.01
+        latest_odds = self._signal_processor.latest_odds
+        if latest_odds:
+            ds.up_ask = latest_odds.up_odds
+            ds.up_bid = latest_odds.up_odds - 0.01
+            ds.down_ask = latest_odds.down_odds
+            ds.down_bid = latest_odds.down_odds - 0.01
             
         ds.is_lockdown = self._circuit_breaker.is_lockdown
         ds.lockdown_reason = self._circuit_breaker.lockdown_reason
