@@ -422,14 +422,19 @@ class Dashboard:
             status = s.gate_statuses.get(i, False)
             val = s.gate_values.get(i, "—")
 
-            if status:
+            if s.gate_statuses.get(i, False):
                 st = "[bold green]PASS"
+                reason = ""
             elif val == "DISABLED":
                 st = "[dim]N-A"
+                reason = ""
             else:
                 st = "[bold red]FAIL"
+                # Extract reason from Engine's Circuit Breaker or Gate result if possible
+                # For now, let's just use the gate_values which contains some info
+                reason = f" [dim]({val})"
             
-            table.add_row(f"[{i}] {gate_names.get(i, '?')}", st, f"[white]{val}")
+            table.add_row(f"[{i}] {gate_names.get(i, '?')}", st, reason)
 
         cl_color = "green" if s.chainlink_age_sec < self._cfg.CHAINLINK_MAX_AGE_SEC else "red"
         cl_status = "OK" if s.chainlink_age_sec < self._cfg.CHAINLINK_MAX_AGE_SEC else "STALE"
