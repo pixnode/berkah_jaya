@@ -333,6 +333,7 @@ class BotEngine:
             ds.up_bid = latest_odds.up_odds - 0.01
             ds.down_ask = latest_odds.down_odds
             ds.down_bid = latest_odds.down_odds - 0.01
+            ds.spread_pct = abs(latest_odds.up_odds + latest_odds.down_odds - 1.0) * 100.0
             
         # Panel E: Safety Gates
         from risk.gates import GateEvaluator
@@ -345,17 +346,23 @@ class BotEngine:
             order_sent=self._order_sent,
         )
         ds.gate_statuses = gate_res.gate_statuses
+        ds.expected_odds = gate_res.expected_odds
+        ds.mispricing = (latest_odds and ds.up_ask < gate_res.expected_odds) if latest_odds else False
         
         # Panel A: Header extras
         ds.wallet_type = self._claim_manager.wallet_type
-        ds.balance = 1000.0 if self._cfg.PAPER_TRADING_MODE else 0.0 # Placeholder: fetch live in future
+        ds.balance = 1000.0 if self._cfg.PAPER_TRADING_MODE else 0.0
         ds.unclaimed = self._claim_manager.unclaimed_balance
         ds.eoa_warning = self._claim_manager.eoa_warning
+        
+        # Sync Health Metrics
+        ds.chainlink_age_sec = self._chainlink_feed.last_event.age if self._chainlink_feed.last_event else 999.0
+        ds.poly_sync_latency_sec = self._poly_feed.sync_latency
         
         ds.gate_values = {
             1: f"${ss.gap:+.1f} / ${ss.gap_threshold:.1f}",
             2: f"${ss.cvd_60s:+.0f} / {ss.cvd_threshold:.0f}",
-            3: f"Ask: {ds.up_ask:.2f} / Edge: {'YES' if latest_odds and ds.up_ask < gate_res.expected_odds else 'NO'}",
+            3: f"Ask: {ds.up_ask:.2f} / Edge: {'YES' if ds.mispricing else 'NO'}",
             4: f"[{self._cfg.ODDS_SWEET_SPOT_LOW:.2f}-{self._cfg.ODDS_SWEET_SPOT_HIGH:.2f}]" if latest_odds else "NO DATA",
             5: f"T-{self._dashboard.state.time_remaining}s",
             6: f"${ss.velocity_1_5s:.1f}/s" if self._cfg.VELOCITY_ENABLED else "DISABLED",
@@ -364,6 +371,10 @@ class BotEngine:
             
         ds.is_lockdown = self._circuit_breaker.is_lockdown
         ds.lockdown_reason = self._circuit_breaker.lockdown_reason
+        
+        # Stats
+        if (ds.wins + ds.losses) > 0:
+            ds.win_rate = ds.wins / (ds.wins + ds.losses)
 
     async def stop(self) -> None:
         """Graceful shutdown of all components."""
