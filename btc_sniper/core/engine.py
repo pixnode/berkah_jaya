@@ -346,6 +346,12 @@ class BotEngine:
         )
         ds.gate_statuses = gate_res.gate_statuses
         
+        # Panel A: Header extras
+        ds.wallet_type = self._claim_manager.wallet_type
+        ds.balance = 1000.0 if self._cfg.PAPER_TRADING_MODE else 0.0 # Placeholder: fetch live in future
+        ds.unclaimed = self._claim_manager.unclaimed_balance
+        ds.eoa_warning = self._claim_manager.eoa_warning
+        
         ds.gate_values = {
             1: f"${ss.gap:+.1f} / ${ss.gap_threshold:.1f}",
             2: f"${ss.cvd_60s:+.0f} / {ss.cvd_threshold:.0f}",
