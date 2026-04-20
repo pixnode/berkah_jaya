@@ -296,7 +296,8 @@ class Dashboard:
         if s.hl_price <= 0:
             return Panel("— WAITING DATA —", title="[bold cyan]Live Price & Gap", border_style="dim")
 
-        gap_color = "green" if abs(s.gap) > s.gap_threshold else "red"
+        # Color based on direction: UP=green, DOWN=red
+        gap_color = "green" if s.gap_direction == "UP" else "red" if s.gap_direction == "DOWN" else "white"
         dir_symbol = "▲" if s.gap_direction == "UP" else "▼" if s.gap_direction == "DOWN" else "—"
 
         table = Table(show_header=False, show_edge=False, pad_edge=False, expand=True)
@@ -305,7 +306,7 @@ class Dashboard:
 
         table.add_row("HL Price", f"[bold white]${s.hl_price:,.2f}")
         table.add_row("Strike", f"[white]${s.strike_price:,.2f}")
-        table.add_row("GAP", f"[bold {gap_color}]{dir_symbol} ${abs(s.gap):,.2f}  [{s.gap_direction}]")
+        table.add_row("GAP", f"[bold {gap_color}]{dir_symbol} ${abs(s.gap):,.2f}  [bold]{s.gap_direction}[/]")
         table.add_row("Threshold", f"[dim]${s.gap_threshold:,.2f} ({s.vol_regime})")
         table.add_row("Velocity", f"[white]${s.velocity:,.2f} / {self._cfg.VELOCITY_MIN_DELTA}")
         table.add_row("ATR (60m)", f"[white]${s.atr:,.2f}  [{s.vol_regime}]")
@@ -419,10 +420,11 @@ class Dashboard:
         table.add_column("Value", ratio=2)
 
         for i in range(1, 8):
-            status = s.gate_statuses.get(i, False)
-            val = s.gate_values.get(i, "—")
+            # JSON keys are always strings, handle both int and str
+            status = s.gate_statuses.get(i) or s.gate_statuses.get(str(i), False)
+            val = s.gate_values.get(i) or s.gate_values.get(str(i), "—")
 
-            if s.gate_statuses.get(i, False):
+            if status:
                 st = "[bold green]PASS"
                 reason = ""
             elif val == "DISABLED":
@@ -430,8 +432,6 @@ class Dashboard:
                 reason = ""
             else:
                 st = "[bold red]FAIL"
-                # Extract reason from Engine's Circuit Breaker or Gate result if possible
-                # For now, let's just use the gate_values which contains some info
                 reason = f" [dim]({val})"
             
             table.add_row(f"[{i}] {gate_names.get(i, '?')}", st, reason)
