@@ -23,6 +23,8 @@ if sys.stdout.encoding.lower() != 'utf-8':
         pass
 
 from rich.live import Live
+from rich.panel import Panel
+from rich.text import Text
 from cli.dashboard import Dashboard, DashboardState, TradeHistoryEntry
 from config import load_config
 
