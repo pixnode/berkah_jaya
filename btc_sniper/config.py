@@ -175,6 +175,7 @@ class BotConfig:
     LOG_FLUSH_INTERVAL_SEC: int
     LOG_ROTATION_DAYS: int
     SNAPSHOT_INTERVAL_SEC: int
+    STATE_SNAPSHOT_INTERVAL_SEC: int
 
     # ── OPERATIONAL ───────────────────────────────────
     PAPER_TRADING_MODE: bool
@@ -281,6 +282,7 @@ def load_config(env_path: Optional[str] = None) -> BotConfig:
         LOG_FLUSH_INTERVAL_SEC=_env_int("LOG_FLUSH_INTERVAL_SEC", 5),
         LOG_ROTATION_DAYS=_env_int("LOG_ROTATION_DAYS", 30),
         SNAPSHOT_INTERVAL_SEC=_env_int("SNAPSHOT_INTERVAL_SEC", 5),
+        STATE_SNAPSHOT_INTERVAL_SEC=_env_int("STATE_SNAPSHOT_INTERVAL_SEC", 5),
         # OPERATIONAL
         PAPER_TRADING_MODE=_env_bool("PAPER_TRADING_MODE", True),
         BOT_VERSION=_env_str("BOT_VERSION", "2.3"),

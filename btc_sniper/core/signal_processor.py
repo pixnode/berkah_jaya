@@ -142,20 +142,22 @@ class SignalProcessor:
             self._update_candle(event.price, 0)
 
         elif isinstance(event, TradeEvent):
-            if event.size_usd < self._cfg.MIN_TRADE_SIZE_USD:
+            size_usd = event.size * event.price
+            if self._cfg.MIN_TRADE_SIZE_USD > 0 and size_usd < self._cfg.MIN_TRADE_SIZE_USD:
                 return
-            delta = event.size_usd if event.side == "BUY" else -event.size_usd
+                
+            delta = size_usd if event.side == "BUY" else -size_usd
             self._cvd_deque.append((now, delta))
             self._cvd_running += delta
             
             if event.side == "BUY":
-                self._buy_deque.append((now, event.size_usd))
-                self._buy_running += event.size_usd
+                self._buy_deque.append((now, size_usd))
+                self._buy_running += size_usd
             else:
-                self._sell_deque.append((now, event.size_usd))
-                self._sell_running += event.size_usd
+                self._sell_deque.append((now, size_usd))
+                self._sell_running += size_usd
             
-            self._update_candle(event.price, event.size_usd)
+            self._update_candle(event.price, size_usd)
 
         elif isinstance(event, ChainlinkEvent):
             self._latest_chainlink = event
