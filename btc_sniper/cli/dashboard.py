@@ -425,7 +425,19 @@ class Dashboard:
             
             table.add_row(f"[{i}] {gate_names.get(i, '?')}", st, f"[white]{val}")
 
-        info = Text(f"\n  Chainlink age: {s.chainlink_age_sec:.1f}s OK  │  Poly sync: {s.poly_sync_latency_sec:.1f}s OK", style="dim")
+        cl_color = "green" if s.chainlink_age_sec < self._cfg.CHAINLINK_MAX_AGE_SEC else "red"
+        cl_status = "OK" if s.chainlink_age_sec < self._cfg.CHAINLINK_MAX_AGE_SEC else "STALE"
+        
+        py_color = "green" if s.poly_sync_latency_sec < self._cfg.POLY_STALE_THRESHOLD_SEC else "red"
+        py_status = "OK" if s.poly_sync_latency_sec < self._cfg.POLY_STALE_THRESHOLD_SEC else "STALE"
+
+        info = Text("\n  Chainlink age: ", style="dim")
+        info.append(f"{s.chainlink_age_sec:.1f}s ", style=cl_color)
+        info.append(cl_status, style=f"bold {cl_color}")
+        info.append("  │  Poly sync: ", style="dim")
+        info.append(f"{s.poly_sync_latency_sec:.1f}s ", style=py_color)
+        info.append(py_status, style=f"bold {py_color}")
+        
         return Panel(Group(table, info), title="[bold magenta]Safety Gates", border_style="magenta")
 
     # ═══════════════════════════════════════════════════
