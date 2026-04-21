@@ -30,7 +30,8 @@ from config import load_config
 
 async def run_viewer():
     # Force loading .env from the parent (root) directory
-    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    # Move up TWO levels to reach the actual project root (berkah_jaya)
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     env_path = os.path.join(root_dir, ".env")
     cfg = load_config(env_path if os.path.exists(env_path) else None)
     
