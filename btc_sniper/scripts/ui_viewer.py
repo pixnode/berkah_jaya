@@ -68,7 +68,7 @@ async def run_viewer():
 
     print("Connecting to Bot UI Stream...")
     
-    with Live(dashboard._build_layout(), refresh_per_second=1, screen=False) as live:
+    with Live(dashboard._build_layout(), refresh_per_second=1, screen=True) as live:
         while True:
             try:
                 if os.path.exists(ui_file):

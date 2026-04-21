@@ -160,7 +160,7 @@ class Dashboard:
                 console=self._console,
                 refresh_per_second=refresh_rate,
                 transient=False,
-                screen=False,
+                screen=True,
             ) as live:
                 self._live = live
                 while self._running:
