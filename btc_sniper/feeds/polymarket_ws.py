@@ -232,10 +232,13 @@ class PolymarketFeed:
 
     async def _process_message(self, raw_msg: str) -> None:
         """Parse and dispatch a Polymarket WebSocket message."""
+        if not raw_msg or raw_msg.strip() == "":
+            return
+
         try:
             data = json.loads(raw_msg)
         except json.JSONDecodeError:
-            logger.warning("Polymarket: invalid JSON message, skipping")
+            logger.debug("Polymarket: non-JSON message received, skipping")
             return
 
         if isinstance(data, list):
