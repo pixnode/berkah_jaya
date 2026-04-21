@@ -141,20 +141,26 @@ class BotEngine:
             self._dashboard.state.window_id = slug
             self._dashboard.state.time_remaining = t_rem
             
-            # Mode selection
+            # Mode selection (PRD v2.3 dynamic timing)
             if t_rem > self._cfg.GOLDEN_WINDOW_START:
                 mode = "INIT"
-            elif t_rem > 48:
-                mode = "ARMED"
             elif t_rem >= self._cfg.GOLDEN_WINDOW_END:
                 mode = "EXECUTE"
             else:
                 mode = "SETTLE"
 
-            self._engine_state["bot_mode"] = mode
-            self._dashboard.state.bot_mode = mode
+            # Dashboard ARMED visual if within 10s of window start
+            if mode == "INIT" and t_rem <= self._cfg.GOLDEN_WINDOW_START + 10:
+                self._dashboard.state.bot_mode = "ARMED"
+            else:
+                self._dashboard.state.bot_mode = mode
 
-            if t_rem > 295: self._order_sent = False
+            self._engine_state["bot_mode"] = mode
+
+            if t_rem > 295:
+                self._order_sent = False
+                self._order_sent_up = False
+                self._order_sent_down = False
 
             # Update dashboard state from components
             self._sync_dashboard()
