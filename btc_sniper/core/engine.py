@@ -374,7 +374,7 @@ class BotEngine:
             timestamp_order_sent=datetime.now(timezone.utc).isoformat(),
             timestamp_confirmed=datetime.now(timezone.utc).isoformat(),
             side=order_res.side or "", strike_price=order_res.entry_odds or 0.0,
-            hl_price_at_trigger=ss.hl_price, gap_value=ss.gap,
+            hl_price_at_trigger=ss.current_hl_price, gap_value=ss.gap,
             gap_threshold_used=ss.gap_threshold, atr_regime=ss.vol_regime,
             cvd_60s=ss.cvd_60s, cvd_threshold_used=ss.cvd_threshold,
             cvd_threshold_pct=0.0, velocity=ss.velocity_1_5s,
