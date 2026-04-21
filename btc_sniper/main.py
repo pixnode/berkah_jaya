@@ -116,12 +116,15 @@ def main() -> None:
     setup_logging(os.getenv("LOG_LEVEL", "INFO"))
 
     try:
+        print("[1/3] Loading Configuration...")
         cfg = load_config(env_path=args.env)
+        print(f"[2/3] Config Loaded. Mode: {'PAPER' if cfg.PAPER_TRADING_MODE else 'LIVE'}")
     except ConfigurationError as exc:
         logger.critical("Configuration error: %s", exc)
         sys.exit(1)
 
     try:
+        print("[3/3] Starting Bot Engine... (Press Ctrl+C to stop)")
         asyncio.run(async_main(cfg))
     except KeyboardInterrupt:
         logger.info("Process interrupted.")
