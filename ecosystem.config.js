@@ -1,8 +1,8 @@
 module.exports = {
   apps : [{
     name: "btc-sniper",
-    script: "./btc_sniper/main.py",
-    interpreter: "python3",
+    script: "btc_sniper/main.py",
+    interpreter: "/root/berkah_jaya/btc_sniper/venv/bin/python3",
     instances: 1,
     autorestart: true,
     watch: false,
