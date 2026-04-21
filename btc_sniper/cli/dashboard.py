@@ -108,6 +108,9 @@ class DashboardState:
     is_lockdown: bool = False
     lockdown_reason: str = ""
     paused: bool = False
+    hedge_mode_enabled: bool = False
+    up_armed: bool = False
+    down_armed: bool = False
 
 
 class Dashboard:
@@ -265,6 +268,9 @@ class Dashboard:
         if s.paused:
             line1.append(" [PAUSED] ", style="bold black on cyan")
             line1.append("  ")
+        if s.hedge_mode_enabled:
+            line1.append(" [HEDGE MODE] ", style="bold white on magenta")
+            line1.append("  ")
 
         line1.append(f"[{s.bot_mode}]", style=f"bold {mode_color}")
         line1.append(f"  Window: {s.window_id}   ", style="cyan")
@@ -310,6 +316,12 @@ class Dashboard:
         table.add_row("Threshold", f"[dim]${s.gap_threshold:,.2f} ({s.vol_regime})")
         table.add_row("Velocity", f"[white]${s.velocity:,.2f} / {self._cfg.VELOCITY_MIN_DELTA}")
         table.add_row("ATR (60m)", f"[white]${s.atr:,.2f}  [{s.vol_regime}]")
+
+        if s.hedge_mode_enabled:
+            up_status = "[bold green]ARMED" if s.up_armed else "[dim]WAITING"
+            down_status = "[bold green]ARMED" if s.down_armed else "[dim]WAITING"
+            table.add_row("HEDGE UP", f"{up_status} [dim](ask <= {self._cfg.HEDGE_MODE_ODDS_MAX})")
+            table.add_row("HEDGE DOWN", f"{down_status} [dim](ask <= {self._cfg.HEDGE_MODE_ODDS_MAX})")
 
         return Panel(table, title="[bold cyan]Live Price & Gap", border_style="cyan")
 

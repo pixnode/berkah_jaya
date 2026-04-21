@@ -62,6 +62,7 @@ class TradeRecord:
     pnl_usdc: Optional[float]
     claim_method: Optional[str]
     claim_timestamp: Optional[str]
+    mode: str
     bot_version: str
 
 
@@ -179,8 +180,8 @@ TRADE_LOG_FIELDS = [
     "odds_in_sweet_spot", "spread_pct", "expected_odds", "mispricing_delta",
     "slippage_delta", "slippage_threshold_used", "blockchain_latency_ms",
     "shares_bought", "cost_usdc", "result", "resolution_price",
-    "payout_usdc", "pnl_usdc", "claim_method", "claim_timestamp", "bot_version",
-]  # 32 fields
+    "payout_usdc", "pnl_usdc", "claim_method", "claim_timestamp", "mode", "bot_version",
+]  # 33 fields
 
 SKIP_LOG_FIELDS = [
     "session_id", "window_id", "timestamp", "skip_reason", "skip_stage",

@@ -105,14 +105,19 @@ class BotConfig:
     CVD_THRESHOLD_PCT: float = 25.0
     CVD_CALC_INTERVAL_MS: int = 500
 
-    # ── VELOCITY FILTER ───────────────────────────────
+    # ── GATE TOGGLES ──────────────────────────────────
+    GATE3_ENABLED: bool = True
+
+    # ── HEDGE MODE ────────────────────────────────────
+    HEDGE_MODE_ENABLED: bool = False
+    HEDGE_MODE_ODDS_MAX: float = 0.50
+
+    # ── TIMING & VELOCITY ─────────────────────────────
+    GOLDEN_WINDOW_START: int = 60
+    GOLDEN_WINDOW_END: int = 42
     VELOCITY_ENABLED: bool = True
     VELOCITY_MIN_DELTA: float = 15.0
     VELOCITY_WINDOW_SECONDS: float = 1.5
-
-    # ── TIMING ────────────────────────────────────────
-    GOLDEN_WINDOW_START: int = 60
-    GOLDEN_WINDOW_END: int = 42
 
     # ── SLIPPAGE ──────────────────────────────────────
     SLIPPAGE_THRESHOLD_NORMAL: float = 1.0
@@ -211,6 +216,9 @@ def load_config(env_path: Optional[str] = None) -> BotConfig:
         CVD_VOLUME_WINDOW_MINUTES=_env_int("CVD_VOLUME_WINDOW_MINUTES", 30),
         CVD_THRESHOLD_PCT=_env_float("CVD_THRESHOLD_PCT", 25.0),
         CVD_CALC_INTERVAL_MS=_env_int("CVD_CALC_INTERVAL_MS", 500),
+        GATE3_ENABLED=_env_bool("GATE3_ENABLED", True),
+        HEDGE_MODE_ENABLED=_env_bool("HEDGE_MODE_ENABLED", False),
+        HEDGE_MODE_ODDS_MAX=_env_float("HEDGE_MODE_ODDS_MAX", 0.50),
         VELOCITY_ENABLED=_env_bool("VELOCITY_ENABLED", True),
         VELOCITY_MIN_DELTA=_env_float("VELOCITY_MIN_DELTA", 15.0),
         VELOCITY_WINDOW_SECONDS=_env_float("VELOCITY_WINDOW_SECONDS", 1.5),

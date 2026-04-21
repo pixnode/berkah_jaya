@@ -28,6 +28,8 @@ class BotEngine:
         self._tasks: Set[asyncio.Task] = set()
         self._session_id = f"SES-{int(time.time())}"
         self._order_sent = False
+        self._order_sent_up = False
+        self._order_sent_down = False
         self._stopping = False
 
         # Ensure output directory exists
@@ -128,6 +130,8 @@ class BotEngine:
                     await self._poly_feed.subscribe(slug)
                 self._last_subscribed_slug = slug
                 self._order_sent = False
+                self._order_sent_up = False
+                self._order_sent_down = False
                 if hasattr(self._signal_processor, "reset_cvd"):
                     self._signal_processor.reset_cvd()
                 logger.info(f"New window: {slug}")
@@ -175,8 +179,11 @@ class BotEngine:
                             logger.debug("Resume denied: %s | Failed checks: %s", resume_res.reason, resume_res.failed_checks)
 
             # Execution logic
-            if mode == "EXECUTE" and not self._order_sent and not self._circuit_breaker.is_lockdown:
-                await self._handle_execution(slug)
+            if mode == "EXECUTE" and not self._circuit_breaker.is_lockdown:
+                if self._cfg.HEDGE_MODE_ENABLED:
+                    await self._handle_hedge_execution(slug)
+                elif not self._order_sent:
+                    await self._handle_execution(slug)
                 
             await asyncio.sleep(0.1)
 
@@ -242,6 +249,7 @@ class BotEngine:
                     pnl_usdc=None,
                     claim_method=None,
                     claim_timestamp=None,
+                    mode="A",
                     bot_version=getattr(self._cfg, "BOT_VERSION", "2.3")
                 )
                 await self._audit_logger.log_trade(trade)
@@ -288,6 +296,80 @@ class BotEngine:
                 chainlink_age_sec=0
             )
             await self._audit_logger.log_skip(skip)
+
+    async def _handle_hedge_execution(self, slug: str) -> None:
+        """Execute Hedge Strategy: Buy both sides if they are cheap enough."""
+        from logs.audit_logger import TradeRecord
+        from risk.gates import GateResult
+        
+        t_rem = get_time_remaining()
+        in_window = self._cfg.GOLDEN_WINDOW_END <= t_rem <= self._cfg.GOLDEN_WINDOW_START
+        if not in_window:
+            return
+
+        latest_odds = self._signal_processor.latest_odds
+        if not latest_odds:
+            return
+
+        up_odds = latest_odds.up_odds
+        down_odds = latest_odds.down_odds
+        
+        # Beli UP jika murah
+        if up_odds <= self._cfg.HEDGE_MODE_ODDS_MAX and not self._order_sent_up:
+            logger.info("🛡️ HEDGE UP: odds %.3f <= %.3f", up_odds, self._cfg.HEDGE_MODE_ODDS_MAX)
+            gate_res = GateResult(all_pass=True, side="UP", target_ask=up_odds, expected_odds=up_odds)
+            order_res = await self._order_executor.execute(gate_res, slug)
+            if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
+                self._order_sent_up = True
+                await self._log_hedge_trade(slug, order_res, "HEDGE_UP")
+        
+        # Beli DOWN jika murah
+        if down_odds <= self._cfg.HEDGE_MODE_ODDS_MAX and not self._order_sent_down:
+            logger.info("🛡️ HEDGE DOWN: odds %.3f <= %.3f", down_odds, self._cfg.HEDGE_MODE_ODDS_MAX)
+            gate_res = GateResult(all_pass=True, side="DOWN", target_ask=down_odds, expected_odds=down_odds)
+            order_res = await self._order_executor.execute(gate_res, slug)
+            if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
+                self._order_sent_down = True
+                await self._log_hedge_trade(slug, order_res, "HEDGE_DOWN")
+
+    async def _log_hedge_trade(self, slug: str, order_res, mode: str) -> None:
+        """Helper to log hedge trades and update dashboard."""
+        from logs.audit_logger import TradeRecord
+        from cli.dashboard import TradeHistoryEntry
+        
+        ss = self._signal_processor.state
+        trade = TradeRecord(
+            session_id=self._session_id, window_id=slug,
+            timestamp_trigger=datetime.now(timezone.utc).isoformat(),
+            timestamp_order_sent=datetime.now(timezone.utc).isoformat(),
+            timestamp_confirmed=datetime.now(timezone.utc).isoformat(),
+            side=order_res.side or "", strike_price=order_res.entry_odds or 0.0,
+            hl_price_at_trigger=ss.hl_price, gap_value=ss.gap,
+            gap_threshold_used=ss.gap_threshold, atr_regime=ss.vol_regime,
+            cvd_60s=ss.cvd_60s, cvd_threshold_used=ss.cvd_threshold,
+            cvd_threshold_pct=0.0, velocity=ss.velocity_1_5s,
+            entry_odds=order_res.entry_odds or 0.0, odds_in_sweet_spot=True,
+            spread_pct=0.0, expected_odds=order_res.entry_odds or 0.0,
+            mispricing_delta=0.0, slippage_delta=order_res.slippage_delta,
+            slippage_threshold_used=0.0, blockchain_latency_ms=0,
+            shares_bought=order_res.shares_bought or 0.0,
+            cost_usdc=order_res.cost_usd or 0.0, result=order_res.status,
+            resolution_price=None, payout_usdc=None, pnl_usdc=None,
+            claim_method=None, claim_timestamp=None, mode=mode,
+            bot_version=getattr(self._cfg, "BOT_VERSION", "2.3")
+        )
+        await self._audit_logger.log_trade(trade)
+        
+        entry = TradeHistoryEntry(
+            number=len(self._dashboard.state.trade_history)+1,
+            time_str=datetime.now().strftime("%H:%M:%S"),
+            result="OPEN", side=order_res.side or "",
+            odds=order_res.entry_odds or 0, gap=ss.gap,
+            cvd_pct=0, velocity=ss.velocity_1_5s,
+            spread=0, slippage=order_res.slippage_delta, claim="WAIT"
+        )
+        self._dashboard.state.trade_history.append(entry)
+        asyncio.create_task(self._claim_and_finalize(slug, order_res, entry))
 
     async def _claim_and_finalize(self, slug, order_res, history_entry):
         """Wait for resolution and claim."""
@@ -346,6 +428,15 @@ class BotEngine:
             order_sent=self._order_sent,
         )
         ds.gate_statuses = gate_res.gate_statuses
+
+        # Hedge Mode Status
+        ds.hedge_mode_enabled = self._cfg.HEDGE_MODE_ENABLED
+        if latest_odds:
+            ds.up_armed = latest_odds.up_odds <= self._cfg.HEDGE_MODE_ODDS_MAX
+            ds.down_armed = latest_odds.down_odds <= self._cfg.HEDGE_MODE_ODDS_MAX
+        else:
+            ds.up_armed = False
+            ds.down_armed = False
         ds.expected_odds = gate_res.expected_odds
         ds.mispricing = (latest_odds and ds.up_ask < gate_res.expected_odds) if latest_odds else False
         

@@ -150,32 +150,35 @@ class GateEvaluator:
         # ══════════════════════════════════════════════
         # GATE 3 — Dual Side Liquidity + Mispricing
         # ══════════════════════════════════════════════
-        if book is None:
-            return _fail(3, "NO_LIQUIDITY: order book data unavailable")
+        if not self._cfg.GATE3_ENABLED:
+            gate_statuses[3] = True
+        else:
+            if book is None:
+                return _fail(3, "NO_LIQUIDITY: order book data unavailable")
 
-        # Check dual side availability
-        if book.up_ask <= 0:
-            return _fail(3, "NO_LIQUIDITY: UP ask not available")
-        if book.down_bid <= 0:
-            return _fail(3, "NO_LIQUIDITY: DOWN bid not available")
+            # Check dual side availability
+            if book.up_ask <= 0:
+                return _fail(3, "NO_LIQUIDITY: UP ask not available")
+            if book.down_bid <= 0:
+                return _fail(3, "NO_LIQUIDITY: DOWN bid not available")
 
-        # Spread check
-        if book.spread_pct > self._cfg.SPREAD_MAX_PCT:
-            return _fail(
-                3,
-                f"SPREAD_TOO_WIDE: {book.spread_pct:.1f}% > max {self._cfg.SPREAD_MAX_PCT:.1f}%",
-            )
+            # Spread check
+            if book.spread_pct > self._cfg.SPREAD_MAX_PCT:
+                return _fail(
+                    3,
+                    f"SPREAD_TOO_WIDE: {book.spread_pct:.1f}% > max {self._cfg.SPREAD_MAX_PCT:.1f}%",
+                )
 
-        # Mispricing check: current_ask must be cheaper than expected
-        current_ask = target_ask
-        mispricing_edge = expected_odds - self._cfg.MISPRICING_MIN_EDGE
-        if current_ask >= mispricing_edge:
-            return _fail(
-                3,
-                f"NO_MISPRICING: ask={current_ask:.3f} >= expected={expected_odds:.3f}-{self._cfg.MISPRICING_MIN_EDGE}",
-            )
+            # Mispricing check: current_ask must be cheaper than expected
+            current_ask = target_ask
+            mispricing_edge = expected_odds - self._cfg.MISPRICING_MIN_EDGE
+            if current_ask >= mispricing_edge:
+                return _fail(
+                    3,
+                    f"NO_MISPRICING: ask={current_ask:.3f} >= expected={expected_odds:.3f}-{self._cfg.MISPRICING_MIN_EDGE}",
+                )
 
-        gate_statuses[3] = True
+            gate_statuses[3] = True
 
         # ══════════════════════════════════════════════
         # GATE 4 — Odds Boundary (MIN/MAX) — NEW in v2.3
