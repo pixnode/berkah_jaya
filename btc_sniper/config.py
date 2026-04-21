@@ -299,11 +299,11 @@ def validate_config(cfg: BotConfig) -> None:
                 raise ConfigurationError(f"{name} wajib di live mode")
 
     # ── Relational constraints ────────────────────────
-    if not (cfg.ODDS_MIN < cfg.ODDS_SWEET_SPOT_LOW < cfg.ODDS_SWEET_SPOT_HIGH < cfg.ODDS_MAX):
+    if not (cfg.ODDS_MIN <= cfg.ODDS_SWEET_SPOT_LOW <= cfg.ODDS_SWEET_SPOT_HIGH <= cfg.ODDS_MAX):
         raise ConfigurationError(
-            f"Odds ordering violated: ODDS_MIN({cfg.ODDS_MIN}) < "
-            f"SWEET_LOW({cfg.ODDS_SWEET_SPOT_LOW}) < "
-            f"SWEET_HIGH({cfg.ODDS_SWEET_SPOT_HIGH}) < "
+            f"Odds ordering violated: ODDS_MIN({cfg.ODDS_MIN}) <= "
+            f"SWEET_LOW({cfg.ODDS_SWEET_SPOT_LOW}) <= "
+            f"SWEET_HIGH({cfg.ODDS_SWEET_SPOT_HIGH}) <= "
             f"ODDS_MAX({cfg.ODDS_MAX}) required"
         )
 
