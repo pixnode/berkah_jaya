@@ -68,7 +68,7 @@ class DashboardState:
     strike_price: float = 0.0
     gap: float = 0.0
     gap_direction: str = "NEUTRAL"
-    gap_threshold: float = 45.0
+    gap_threshold: float = 15.0
     velocity: float = 0.0
     atr: float = 0.0
     vol_regime: str = "NORM"

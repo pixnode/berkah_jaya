@@ -87,7 +87,7 @@ class BotConfig:
     # ── STRATEGY CORE ─────────────────────────────────
     BASE_SHARES: float = 1.0
     MAX_POSITION_USD: float = 10.0
-    GAP_THRESHOLD_DEFAULT: float = 45.0
+    GAP_THRESHOLD_DEFAULT: float = 15.0
     GAP_THRESHOLD_LOW_VOL: float = 60.0
     GAP_THRESHOLD_HIGH_VOL: float = 35.0
     ATR_LOW_THRESHOLD: float = 50.0
@@ -203,7 +203,7 @@ def load_config(env_path: Optional[str] = None) -> BotConfig:
         CHAINLINK_CONTRACT_ADDRESS=_env_str("CHAINLINK_CONTRACT_ADDRESS", "0xc907E116054Ad103354f2D350FD2514433D57F6F"),
         BASE_SHARES=_env_float("BASE_SHARES", 1.0),
         MAX_POSITION_USD=_env_float("MAX_POSITION_USD", 10.0),
-        GAP_THRESHOLD_DEFAULT=_env_float("GAP_THRESHOLD_DEFAULT", 45.0),
+        GAP_THRESHOLD_DEFAULT=_env_float("GAP_THRESHOLD_DEFAULT", 15.0),
         GAP_THRESHOLD_LOW_VOL=_env_float("GAP_THRESHOLD_LOW_VOL", 60.0),
         GAP_THRESHOLD_HIGH_VOL=_env_float("GAP_THRESHOLD_HIGH_VOL", 35.0),
         ATR_LOW_THRESHOLD=_env_float("ATR_LOW_THRESHOLD", 50.0),
@@ -295,8 +295,9 @@ def validate_config(cfg: BotConfig) -> None:
 
     if not is_paper:
         for name, val in [("POLY_API_KEY", cfg.POLY_API_KEY), ("POLY_API_SECRET", cfg.POLY_API_SECRET), ("POLY_API_PASSPHRASE", cfg.POLY_API_PASSPHRASE)]:
-            if not val:
-                raise ConfigurationError(f"{name} wajib di live mode")
+                transient=False,
+                screen=True, # Kembali ke mode stabil
+            ) as live: mode")
 
     # ── Relational constraints ────────────────────────
     if not (cfg.ODDS_MIN <= cfg.ODDS_SWEET_SPOT_LOW <= cfg.ODDS_SWEET_SPOT_HIGH <= cfg.ODDS_MAX):
@@ -366,8 +367,7 @@ def _print_startup_banner(cfg: BotConfig) -> None:
     console = Console()
     print_paper_mode_warning(cfg)
 
-    table = Table(title=f"BTC SNIPER v{cfg.BOT_VERSION} — Active Configuration", show_lines=False)
-    table.add_column("Parameter", style="cyan", min_width=30)
+    table = Table(title=f"BTC SNIPER v{cfg.BOT_VERSION}    with Live(dashboard._build_layout(), refresh_per_second=1, screen=True) as live:   table.add_column("Parameter", style="cyan", min_width=30)
     table.add_column("Value", style="white", min_width=20)
 
     sections = {
