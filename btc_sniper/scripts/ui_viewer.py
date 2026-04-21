@@ -34,7 +34,12 @@ async def run_viewer():
     env_path = os.path.join(root_dir, ".env")
     cfg = load_config(env_path if os.path.exists(env_path) else None)
     
+    # Check both potential locations
+    alt_ui_file = os.path.join(root_dir, "output", "dashboard_ui.json")
     ui_file = os.path.join(root_dir, cfg.OUTPUT_DIR.lstrip("./"), "dashboard_ui.json")
+    
+    if not os.path.exists(ui_file) and os.path.exists(alt_ui_file):
+        ui_file = alt_ui_file
     
     if not os.path.exists(ui_file):
         print(f"Error: UI State file not found at {ui_file}")
