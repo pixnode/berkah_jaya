@@ -203,12 +203,15 @@ class ClaimManager:
         max_polls = 180
         for poll in range(max_polls):
             try:
-                url = f"https://clob.polymarket.com/markets/{window_id}"
+                url = f"https://gamma-api.polymarket.com/markets?slug={window_id}"
                 async with self._session.get(url) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        if data.get("resolved", False):
-                            return data.get("winning_outcome", "").upper() in ("YES", "UP")
+                        if isinstance(data, list) and len(data) > 0:
+                            market = data[0]
+                            if market.get("resolved", False):
+                                # Gamma uses 'outcome' field for resolved markets
+                                return market.get("outcome", "").upper() in ("YES", "UP")
             except Exception as exc:
                 logger.debug("Resolution poll error: %s", exc)
             await asyncio.sleep(5.0)
