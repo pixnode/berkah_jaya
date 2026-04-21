@@ -172,11 +172,28 @@ class ClaimManager:
         return ClaimResult("PENDING_MANUAL", window_id, payout, "PENDING", None, max_retries, False)
 
     async def _simulate_claim(self, window_id: str, order_result: OrderResult) -> ClaimResult:
-        """Simulate claim for paper trading mode."""
-        won = True
+        """Simulate claim for paper trading mode dengan mengecek hasil asli market."""
+        logger.info("[PAPER] Menunggu resolusi market untuk %s...", window_id)
+        
+        # 1. Tunggu hasil asli dari API Polymarket
+        up_won = await self._wait_for_resolution(window_id)
+        
+        # 2. Tentukan apakah trade ini menang berdasarkan side-nya
+        # OrderResult side bisa "UP", "DOWN", "YES", atau "NO"
+        side = (order_result.side or "").upper()
+        if side in ("UP", "YES"):
+            won = up_won
+        else:
+            won = not up_won
+            
+        # 3. Hitung payout ($1.00 per share jika menang, 0 jika kalah)
         payout = order_result.shares_bought if won else 0.0
-        logger.info("[PAPER] Claim simulated: %s payout=$%.4f", "WIN" if won else "LOSS", payout)
-        return ClaimResult("PAPER", window_id, payout, "PAPER", time.time(), 0, True)
+        status = "PAPER" if won else "LOSS"
+        
+        logger.info("[PAPER] Hasil %s: %s | Payout: $%.2f | Cost: $%.2f", 
+                    window_id, "WIN" if won else "LOSS", payout, order_result.cost_usd)
+        
+        return ClaimResult(status, window_id, payout, "PAPER", time.time(), 0, True)
 
     async def _wait_for_resolution(self, window_id: str) -> bool:
         """Poll for on-chain resolution. Returns True if we won."""

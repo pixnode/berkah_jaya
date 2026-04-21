@@ -38,6 +38,7 @@ class BotEngine:
         # State for monitoring
         self._engine_state = {"window_id": "—", "t_remaining": 0, "bot_mode": "INIT"}
         self._last_subscribed_slug: Optional[str] = None
+        self._paper_balance = 1000.0  # Saldo awal simulasi (Available to trade)
 
         # Components
         from logs.audit_logger import AuditLogger
@@ -271,6 +272,10 @@ class BotEngine:
                 )
                 self._dashboard.state.trade_history.append(entry)
                 
+                # Update paper balance immediately on entry
+                if self._cfg.PAPER_TRADING_MODE:
+                    self._paper_balance -= (order_res.cost_usd or 0)
+                
                 asyncio.create_task(self._claim_and_finalize(slug, order_res, entry))
             else:
                 logger.warning("Order failed: %s - %s", order_res.status, order_res.error_msg)
@@ -399,6 +404,11 @@ class BotEngine:
             spread=0, slippage=order_res.slippage_delta, claim="WAIT"
         )
         self._dashboard.state.trade_history.append(entry)
+        
+        # Update paper balance immediately on entry
+        if self._cfg.PAPER_TRADING_MODE:
+            self._paper_balance -= (order_res.cost_usd or 0)
+            
         asyncio.create_task(self._claim_and_finalize(slug, order_res, entry))
 
     async def _claim_and_finalize(self, slug, order_res, history_entry):
@@ -406,10 +416,12 @@ class BotEngine:
         claim_res = await self._claim_manager.claim(slug, order_res)
         history_entry.result = claim_res.status
         history_entry.claim = "DONE"
-        # Update dashboard P&L
+        # Update dashboard P&L & Balance
         if claim_res.status in ("AUTO", "PAPER"):
             self._dashboard.state.wins += 1
             self._dashboard.state.total_pnl += (claim_res.payout_usd - (order_res.cost_usd or 0))
+            if self._cfg.PAPER_TRADING_MODE:
+                self._paper_balance += claim_res.payout_usd # Tambah hasil menang ke saldo (Claimed)
         elif claim_res.status == "LOSS":
             self._dashboard.state.losses += 1
             self._dashboard.state.total_pnl -= (order_res.cost_usd or 0)
@@ -472,8 +484,9 @@ class BotEngine:
         
         # Panel A: Header extras
         ds.wallet_type = self._claim_manager.wallet_type
-        ds.balance = 1000.0 if self._cfg.PAPER_TRADING_MODE else 0.0
+        ds.balance = self._paper_balance if self._cfg.PAPER_TRADING_MODE else 0.0
         ds.unclaimed = self._claim_manager.unclaimed_balance
+        ds.portfolio = ds.balance + ds.unclaimed
         ds.eoa_warning = self._claim_manager.eoa_warning
         
         # Sync Health Metrics

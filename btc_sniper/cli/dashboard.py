@@ -56,7 +56,8 @@ class DashboardState:
     window_id: str = "—"
     time_remaining: int = 0
     wallet_type: str = "PROXY"
-    balance: float = 0.0
+    portfolio: float = 0.0
+    balance: float = 0.0  # Saldo (Available to trade)
     unclaimed: float = 0.0
     paper_mode: bool = True
     eoa_warning: bool = False
@@ -279,7 +280,8 @@ class Dashboard:
 
         line2 = Text()
         line2.append(f"Wallet: {s.wallet_type}", style="cyan")
-        line2.append(f"  │  Balance: ${s.balance:.2f}", style="green")
+        line2.append(f"  │  Portfolio: ${s.portfolio:.2f}", style="bold green")
+        line2.append(f"  │  Saldo (Avail): ${s.balance:.2f}", style="green")
         line2.append(f"  │  Unclaimed: ${s.unclaimed:.2f}", style="yellow" if s.unclaimed > 0 else "dim")
 
         # Sync indicators
