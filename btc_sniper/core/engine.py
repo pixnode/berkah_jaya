@@ -323,7 +323,19 @@ class BotEngine:
         # Beli UP jika murah
         if up_odds <= self._cfg.HEDGE_MODE_ODDS_MAX and not self._order_sent_up:
             logger.info("🛡️ HEDGE UP: odds %.3f <= %.3f", up_odds, self._cfg.HEDGE_MODE_ODDS_MAX)
-            gate_res = GateResult(all_pass=True, side="UP", target_ask=up_odds, expected_odds=up_odds)
+            ss = self._signal_processor.state
+            gate_res = GateResult(
+                all_pass=True, 
+                failed_gate=None, 
+                fail_reason=None, 
+                gate_statuses={i: True for i in range(1, 8)},
+                evaluated_at=time.time(),
+                signal_snapshot=ss,
+                target_ask=up_odds,
+                expected_odds=up_odds,
+                in_sweet_spot=True,
+                side="UP"
+            )
             order_res = await self._order_executor.execute(gate_res, slug)
             if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
                 self._order_sent_up = True
@@ -332,7 +344,19 @@ class BotEngine:
         # Beli DOWN jika murah
         if down_odds <= self._cfg.HEDGE_MODE_ODDS_MAX and not self._order_sent_down:
             logger.info("🛡️ HEDGE DOWN: odds %.3f <= %.3f", down_odds, self._cfg.HEDGE_MODE_ODDS_MAX)
-            gate_res = GateResult(all_pass=True, side="DOWN", target_ask=down_odds, expected_odds=down_odds)
+            ss = self._signal_processor.state
+            gate_res = GateResult(
+                all_pass=True, 
+                failed_gate=None, 
+                fail_reason=None, 
+                gate_statuses={i: True for i in range(1, 8)},
+                evaluated_at=time.time(),
+                signal_snapshot=ss,
+                target_ask=down_odds,
+                expected_odds=down_odds,
+                in_sweet_spot=True,
+                side="DOWN"
+            )
             order_res = await self._order_executor.execute(gate_res, slug)
             if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
                 self._order_sent_down = True
