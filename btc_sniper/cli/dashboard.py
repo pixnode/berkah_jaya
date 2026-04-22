@@ -68,7 +68,7 @@ class DashboardState:
     strike_price: float = 0.0
     gap: float = 0.0
     gap_direction: str = "NEUTRAL"
-    gap_threshold: float = 45.0
+    gap_threshold: float = 0.0
     velocity: float = 0.0
     atr: float = 0.0
     vol_regime: str = "NORM"
@@ -123,6 +123,7 @@ class Dashboard:
         self._state = DashboardState(
             paper_mode=cfg.PAPER_TRADING_MODE,
             bot_version=cfg.BOT_VERSION,
+            gap_threshold=cfg.GAP_THRESHOLD_DEFAULT,
         )
         self._running: bool = False
         self._live: Optional[Live] = None
