@@ -582,6 +582,7 @@ class BotEngine:
         
         # Panel A: Header extras
         ds.wallet_type = self._claim_manager.wallet_type
+        ds.paper_mode = self._cfg.PAPER_TRADING_MODE  # Explicitly sync — never stale
         ds.balance = self._paper_balance if self._cfg.PAPER_TRADING_MODE else self._claim_manager.wallet_balance
         ds.unclaimed = self._claim_manager.unclaimed_balance
         ds.portfolio = ds.balance + ds.unclaimed
