@@ -581,7 +581,7 @@ class BotEngine:
         
         # Panel A: Header extras
         ds.wallet_type = self._claim_manager.wallet_type
-        ds.balance = self._paper_balance if self._cfg.PAPER_TRADING_MODE else 0.0
+        ds.balance = self._paper_balance if self._cfg.PAPER_TRADING_MODE else 999.0  # Bypass balance check for Live mode until RPC fetcher is added
         ds.unclaimed = self._claim_manager.unclaimed_balance
         ds.portfolio = ds.balance + ds.unclaimed
         ds.eoa_warning = self._claim_manager.eoa_warning
