@@ -3,7 +3,7 @@ module.exports = {
     name: "btc-sniper",
     script: "main.py",
     cwd: "/root/berkah_jaya/btc_sniper/",
-    interpreter: "./venv/bin/python3",
+    interpreter: "/root/berkah_jaya/btc_sniper/venv/bin/python3",
     instances: 1,
     autorestart: true,
     watch: false,
