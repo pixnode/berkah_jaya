@@ -38,6 +38,7 @@ class ClaimResult:
     claimed_at: Optional[float]
     retry_count: int
     is_paper: bool
+    resolution_price: float = 0.0
 
 
 class ClaimManager:
@@ -139,9 +140,9 @@ class ClaimManager:
             await self._log_event("CLAIM_PENDING_MANUAL", window_id, "EOA wallet manual claim required")
             return ClaimResult("PENDING_MANUAL", window_id, payout, "MANUAL", None, 0, False)
 
-        won = await self._wait_for_resolution(window_id)
+        won, price = await self._wait_for_resolution(window_id)
         if not won:
-            return ClaimResult("LOSS", window_id, 0.0, "N-A", None, 0, False)
+            return ClaimResult("LOSS", window_id, 0.0, price, "N-A", None, 0, False)
 
         payout = order_result.shares_bought or 0.0
         self._unclaimed_balance += payout
@@ -160,7 +161,7 @@ class ClaimManager:
                         self._unclaimed_since = 0.0
                     logger.info("Auto-claim successful for %s (attempt %d)", window_id, attempt + 1)
                     await self._log_event("CLAIM_SUCCESS", window_id, f"Auto-claimed ${payout:.4f}")
-                    return ClaimResult("AUTO", window_id, payout, "AUTO", time.time(), attempt, False)
+                    return ClaimResult("AUTO", window_id, payout, price, "AUTO", time.time(), attempt, False)
             except Exception as exc:
                 logger.warning("Claim retry %d/%d error for %s: %s", attempt + 1, max_retries, window_id, exc)
 
@@ -176,7 +177,7 @@ class ClaimManager:
         logger.info("[PAPER] Menunggu resolusi market untuk %s...", window_id)
         
         # 1. Tunggu hasil asli dari API Polymarket
-        up_won = await self._wait_for_resolution(window_id)
+        up_won, price = await self._wait_for_resolution(window_id)
         
         # 2. Tentukan apakah trade ini menang berdasarkan side-nya
         # OrderResult side bisa "UP", "DOWN", "YES", atau "NO"
@@ -193,10 +194,10 @@ class ClaimManager:
         logger.info("[PAPER] Hasil %s: %s | Payout: $%.2f | Cost: $%.2f", 
                     window_id, "WIN" if won else "LOSS", payout, order_result.cost_usd)
         
-        return ClaimResult(status, window_id, payout, "PAPER", time.time(), 0, True)
+        return ClaimResult(status, window_id, payout, price, "PAPER", time.time(), 0, True)
 
-    async def _wait_for_resolution(self, window_id: str) -> bool:
-        """Poll for on-chain resolution. Returns True if we won."""
+    async def _wait_for_resolution(self, window_id: str) -> tuple[bool, float]:
+        """Poll for on-chain resolution. Returns (won, price)."""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
 
@@ -210,12 +211,13 @@ class ClaimManager:
                         if isinstance(data, list) and len(data) > 0:
                             market = data[0]
                             if market.get("resolved", False):
-                                # Gamma uses 'outcome' field for resolved markets
-                                return market.get("outcome", "").upper() in ("YES", "UP")
+                                price = float(market.get("resolutionPrice") or 0.0)
+                                won = market.get("outcome", "").upper() in ("YES", "UP")
+                                return won, price
             except Exception as exc:
                 logger.debug("Resolution poll error: %s", exc)
             await asyncio.sleep(5.0)
-        return False
+        return False, 0.0
 
     async def _send_redeem(self, window_id: str) -> bool:
         """Send redeem request via Polymarket Gasless Relayer."""

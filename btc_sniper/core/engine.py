@@ -238,15 +238,15 @@ class BotEngine:
                     atr_regime=ss.vol_regime,
                     cvd_60s=ss.cvd_60s,
                     cvd_threshold_used=ss.cvd_threshold,
-                    cvd_threshold_pct=self._cfg.CVD_MIN_PCT if hasattr(self._cfg, "CVD_MIN_PCT") else 0.0,
+                    cvd_threshold_pct=getattr(self._cfg, "CVD_THRESHOLD_PCT", 0.0),
                     velocity=ss.velocity_1_5s,
                     entry_odds=order_res.entry_odds or gate_res.target_ask,
-                    odds_in_sweet_spot=(self._cfg.ODDS_SWEET_SPOT_LOW <= (order_res.entry_odds or gate_res.target_ask) <= self._cfg.ODDS_SWEET_SPOT_HIGH),
-                    spread_pct=0.0,
+                    odds_in_sweet_spot=gate_res.in_sweet_spot,
+                    spread_pct=self._signal_processor.latest_book.spread_pct if self._signal_processor.latest_book else 0.0,
                     expected_odds=gate_res.expected_odds,
-                    mispricing_delta=0.0,
+                    mispricing_delta=gate_res.expected_odds - gate_res.target_ask,
                     slippage_delta=order_res.slippage_delta,
-                    slippage_threshold_used=self._cfg.MAX_SLIPPAGE_PCT if hasattr(self._cfg, "MAX_SLIPPAGE_PCT") else 0.0,
+                    slippage_threshold_used=getattr(self._cfg, "SLIPPAGE_THRESHOLD_NORMAL", 0.0),
                     blockchain_latency_ms=0,
                     shares_bought=order_res.shares_bought or 0.0,
                     cost_usdc=order_res.cost_usd or 0.0,
@@ -324,10 +324,43 @@ class BotEngine:
 
         up_odds = latest_odds.up_odds
         down_odds = latest_odds.down_odds
+        pair_cost = up_odds + down_odds
+
+        # CRITICAL FIX: PAIR COST CONTROL
+        if pair_cost >= self._cfg.HEDGE_PAIR_MAX_COST:
+            from logs.audit_logger import SkipRecord
+            reason = f"HEDGE_PAIR_SKIP: pair cost ${pair_cost:.2f} >= max ${self._cfg.HEDGE_PAIR_MAX_COST:.2f}"
+            logger.info("🛡️ %s", reason)
+            
+            skip = SkipRecord(
+                session_id=self._session_id,
+                window_id=slug,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                skip_reason=reason,
+                skip_stage="HEDGE_COST_CONTROL",
+                gap_value=self._signal_processor.state.gap,
+                gap_threshold=self._signal_processor.state.gap_threshold,
+                gap_gate_pass=True,
+                cvd_value=self._signal_processor.state.cvd_60s,
+                cvd_gate_pass=True,
+                liquidity_gate_pass=True,
+                current_ask=pair_cost,
+                min_odds=0.0,
+                max_odds=self._cfg.HEDGE_PAIR_MAX_COST,
+                odds_gate_pass=False,
+                golden_window_gate_pass=True,
+                velocity_gate_pass=True,
+                slippage_gate_pass=True,
+                t_remaining_sec=t_rem,
+                would_have_won=None,
+                chainlink_age_sec=0
+            )
+            await self._audit_logger.log_skip(skip)
+            return
         
         # Beli UP jika murah
-        if up_odds <= self._cfg.HEDGE_MODE_ODDS_MAX and not self._order_sent_up:
-            logger.info("🛡️ HEDGE UP: odds %.3f <= %.3f", up_odds, self._cfg.HEDGE_MODE_ODDS_MAX)
+        if up_odds <= self._cfg.ODDS_MAX and not self._order_sent_up:
+            logger.info("🛡️ HEDGE UP: odds %.3f <= %.3f", up_odds, self._cfg.ODDS_MAX)
             ss = self._signal_processor.state
             gate_res = GateResult(
                 all_pass=True, 
@@ -347,8 +380,8 @@ class BotEngine:
                 await self._log_hedge_trade(slug, order_res, "HEDGE_UP")
         
         # Beli DOWN jika murah
-        if down_odds <= self._cfg.HEDGE_MODE_ODDS_MAX and not self._order_sent_down:
-            logger.info("🛡️ HEDGE DOWN: odds %.3f <= %.3f", down_odds, self._cfg.HEDGE_MODE_ODDS_MAX)
+        if down_odds <= self._cfg.ODDS_MAX and not self._order_sent_down:
+            logger.info("🛡️ HEDGE DOWN: odds %.3f <= %.3f", down_odds, self._cfg.ODDS_MAX)
             ss = self._signal_processor.state
             gate_res = GateResult(
                 all_pass=True, 
@@ -382,9 +415,11 @@ class BotEngine:
             hl_price_at_trigger=ss.current_hl_price, gap_value=ss.gap,
             gap_threshold_used=ss.gap_threshold, atr_regime=ss.vol_regime,
             cvd_60s=ss.cvd_60s, cvd_threshold_used=ss.cvd_threshold,
-            cvd_threshold_pct=0.0, velocity=ss.velocity_1_5s,
+            cvd_threshold_pct=getattr(self._cfg, "CVD_THRESHOLD_PCT", 0.0),
+            velocity=ss.velocity_1_5s,
             entry_odds=order_res.entry_odds or 0.0, odds_in_sweet_spot=True,
-            spread_pct=0.0, expected_odds=order_res.entry_odds or 0.0,
+            spread_pct=self._signal_processor.latest_book.spread_pct if self._signal_processor.latest_book else 0.0,
+            expected_odds=order_res.entry_odds or 0.0,
             mispricing_delta=0.0, slippage_delta=order_res.slippage_delta,
             slippage_threshold_used=0.0, blockchain_latency_ms=0,
             shares_bought=order_res.shares_bought or 0.0,
@@ -416,15 +451,36 @@ class BotEngine:
         claim_res = await self._claim_manager.claim(slug, order_res)
         history_entry.result = claim_res.status
         history_entry.claim = "DONE"
+        
+        # Determine status for CSV
+        csv_result = "WIN" if claim_res.status in ("AUTO", "PAPER") else "LOSS"
+        pnl = claim_res.payout_usd - (order_res.cost_usd or 0)
+        
+        # PERSIST TO CSV
+        await self._audit_logger.update_trade_resolution(
+            window_id=slug,
+            result=csv_result,
+            resolution_price=claim_res.resolution_price,
+            payout_usdc=claim_res.payout_usd,
+            pnl_usdc=pnl,
+            claim_method=claim_res.claim_method,
+            claim_timestamp=datetime.now(timezone.utc).isoformat()
+        )
+        
+        # Synchronize other logs
+        resolution_dir = "UP" if (csv_result == "WIN" and order_res.side in ("UP", "YES")) or (csv_result == "LOSS" and order_res.side in ("DOWN", "NO")) else "DOWN"
+        await self._audit_logger.update_skip_would_have_won(slug, resolution_dir)
+        await self._audit_logger.update_snapshot_window_result(slug, csv_result)
+
         # Update dashboard P&L & Balance
         if claim_res.status in ("AUTO", "PAPER"):
             self._dashboard.state.wins += 1
-            self._dashboard.state.total_pnl += (claim_res.payout_usd - (order_res.cost_usd or 0))
+            self._dashboard.state.total_pnl += pnl
             if self._cfg.PAPER_TRADING_MODE:
                 self._paper_balance += claim_res.payout_usd # Tambah hasil menang ke saldo (Claimed)
         elif claim_res.status == "LOSS":
             self._dashboard.state.losses += 1
-            self._dashboard.state.total_pnl -= (order_res.cost_usd or 0)
+            self._dashboard.state.total_pnl += pnl
 
     def _sync_dashboard(self):
         """Sync component states to dashboard (PRD v2.3 compliant fields)."""
@@ -474,8 +530,8 @@ class BotEngine:
         # Hedge Mode Status
         ds.hedge_mode_enabled = self._cfg.HEDGE_MODE_ENABLED
         if latest_odds:
-            ds.up_armed = latest_odds.up_odds <= self._cfg.HEDGE_MODE_ODDS_MAX
-            ds.down_armed = latest_odds.down_odds <= self._cfg.HEDGE_MODE_ODDS_MAX
+            ds.up_armed = latest_odds.up_odds <= self._cfg.ODDS_MAX
+            ds.down_armed = latest_odds.down_odds <= self._cfg.ODDS_MAX
         else:
             ds.up_armed = False
             ds.down_armed = False

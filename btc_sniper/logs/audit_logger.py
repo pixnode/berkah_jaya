@@ -334,6 +334,7 @@ class AuditLogger:
     async def update_trade_resolution(
         self,
         window_id: str,
+        result: str,
         resolution_price: float,
         payout_usdc: float,
         pnl_usdc: float,
@@ -346,6 +347,7 @@ class AuditLogger:
             await self._update_csv_rows(
                 path, TRADE_LOG_FIELDS, "window_id", window_id,
                 {
+                    "result": result,
                     "resolution_price": resolution_price,
                     "payout_usdc": payout_usdc,
                     "pnl_usdc": pnl_usdc,

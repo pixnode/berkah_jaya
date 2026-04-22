@@ -95,10 +95,10 @@ class BotConfig:
     ATR_LOOKBACK_CANDLES: int = 12
 
     # ── ODDS BOUNDARY ─────────────────────────────────
-    ODDS_MIN: float = 0.58
-    ODDS_MAX: float = 0.82
-    ODDS_SWEET_SPOT_LOW: float = 0.62
-    ODDS_SWEET_SPOT_HIGH: float = 0.76
+    ODDS_MIN: float = 0.01
+    ODDS_MAX: float = 0.30
+    ODDS_SWEET_SPOT_LOW: float = 0.01
+    ODDS_SWEET_SPOT_HIGH: float = 0.30
 
     # ── CVD ────────────────────────────────────────────
     CVD_VOLUME_WINDOW_MINUTES: int = 30
@@ -111,6 +111,7 @@ class BotConfig:
     # ── HEDGE MODE ────────────────────────────────────
     HEDGE_MODE_ENABLED: bool = False
     HEDGE_MODE_ODDS_MAX: float = 0.50
+    HEDGE_PAIR_MAX_COST: float = 0.35
 
     # ── TIMING & VELOCITY ─────────────────────────────
     GOLDEN_WINDOW_START: int = 60
@@ -210,7 +211,7 @@ def load_config(env_path: Optional[str] = None) -> BotConfig:
         ATR_HIGH_THRESHOLD=_env_float("ATR_HIGH_THRESHOLD", 150.0),
         ATR_LOOKBACK_CANDLES=_env_int("ATR_LOOKBACK_CANDLES", 12),
         ODDS_MIN=_env_float("ODDS_MIN", 0.58),
-        ODDS_MAX=_env_float("ODDS_MAX", 0.82),
+        ODDS_MAX=_env_float("ODDS_MAX", 0.30),
         ODDS_SWEET_SPOT_LOW=_env_float("ODDS_SWEET_SPOT_LOW", 0.62),
         ODDS_SWEET_SPOT_HIGH=_env_float("ODDS_SWEET_SPOT_HIGH", 0.76),
         CVD_VOLUME_WINDOW_MINUTES=_env_int("CVD_VOLUME_WINDOW_MINUTES", 30),
@@ -219,6 +220,7 @@ def load_config(env_path: Optional[str] = None) -> BotConfig:
         GATE3_ENABLED=_env_bool("GATE3_ENABLED", True),
         HEDGE_MODE_ENABLED=_env_bool("HEDGE_MODE_ENABLED", False),
         HEDGE_MODE_ODDS_MAX=_env_float("HEDGE_MODE_ODDS_MAX", 0.50),
+        HEDGE_PAIR_MAX_COST=_env_float("HEDGE_PAIR_MAX_COST", 0.35),
         VELOCITY_ENABLED=_env_bool("VELOCITY_ENABLED", True),
         VELOCITY_MIN_DELTA=_env_float("VELOCITY_MIN_DELTA", 15.0),
         VELOCITY_WINDOW_SECONDS=_env_float("VELOCITY_WINDOW_SECONDS", 1.5),
