@@ -249,48 +249,36 @@ class ClaimManager:
             return False
 
     async def fetch_wallet_balance(self) -> float:
-        """Fetch USDC.e balance from Polygon RPC using raw eth_call (same pattern as chainlink_feed.py)."""
-        if not self._cfg.POLYGON_RPC_URL or not self._cfg.POLYMARKET_PROXY_WALLET:
+        """Fetch collateral balance from Polymarket Exchange via CLOB API.
+
+        Funds deposited to Polymarket live inside the Exchange contract,
+        NOT as raw USDC in the wallet. The only reliable way to query
+        available balance is via the CLOB API's get_balance_allowance().
+        """
+        if self._clob_client is None:
             return self._wallet_balance
 
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
-
         try:
-            # balanceOf(address) selector = 0x70a08231
-            # Pad address to 32 bytes (remove 0x prefix, left-pad with zeros)
-            addr = self._cfg.POLYMARKET_PROXY_WALLET.lower().replace("0x", "")
-            call_data = "0x70a08231" + addr.zfill(64)
-
-            payload = {
-                "jsonrpc": "2.0",
-                "method": "eth_call",
-                "params": [
-                    {
-                        "to": self._cfg.USDC_ADDRESS,
-                        "data": call_data,
-                    },
-                    "latest",
-                ],
-                "id": 1,
-            }
-
-            async with self._session.post(
-                self._cfg.POLYGON_RPC_URL,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-            ) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    hex_balance = result.get("result", "0x0")
-                    raw_balance = int(hex_balance, 16)
-                    # USDC has 6 decimals
-                    self._wallet_balance = raw_balance / 1e6
-                    return self._wallet_balance
+            # Run the synchronous CLOB call in a thread to avoid blocking the event loop
+            import asyncio
+            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+            params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, self._clob_client.get_balance_allowance, params
+            )
+            # result is typically {"balance": "6000000", "allowance": "..."} (in raw units, 6 decimals)
+            if isinstance(result, dict) and "balance" in result:
+                raw = float(result["balance"])
+                # CLOB API may return in raw (micro-USDC) or in USDC — handle both
+                if raw > 1_000_000:
+                    self._wallet_balance = raw / 1e6  # Raw micro-USDC
                 else:
-                    logger.warning("Balance fetch HTTP %d", resp.status)
+                    self._wallet_balance = raw  # Already in USDC
+                logger.debug("CLOB balance: $%.2f", self._wallet_balance)
+            elif isinstance(result, dict):
+                logger.warning("Unexpected balance response: %s", result)
         except Exception as exc:
-            logger.warning("Failed to fetch wallet balance: %s", exc)
+            logger.warning("Failed to fetch balance via CLOB API: %s", exc)
 
         return self._wallet_balance
 
