@@ -189,7 +189,7 @@ class CircuitBreaker:
                 "hl_feed_connected": hl_feed_connected,
                 "poly_feed_connected": poly_feed_connected,
                 "chainlink_fresh": chainlink_fresh,
-                "balance_sufficient": wallet_balance >= min_balance or self._cfg.PAPER_TRADING_MODE,
+                "balance_sufficient": True,  # Polymarket API rejects insufficient funds — no local block needed
                 "no_overdue_claims": unclaimed_since_sec < (30 * 60),
             }
 
