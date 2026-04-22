@@ -54,6 +54,7 @@ class ClaimManager:
         self._unclaimed_since: float = 0.0
         self._clob_client: Optional[object] = None
         self._chainlink_feed: Optional[object] = None
+        self._wallet_balance: float = 0.0
 
     def set_chainlink_feed(self, feed: object) -> None:
         """Inject chainlink feed for paper mode simulation."""
@@ -88,6 +89,11 @@ class ClaimManager:
     def wallet_type(self) -> str:
         """Detected wallet type: PROXY or EOA."""
         return self._wallet_type
+
+    @property
+    def wallet_balance(self) -> float:
+        """Current on-chain USDC.e balance of the SAFE wallet."""
+        return self._wallet_balance
 
     @property
     def unclaimed_balance(self) -> float:
@@ -241,6 +247,52 @@ class ClaimManager:
         except Exception as exc:
             logger.warning("Redeem failed: %s", exc)
             return False
+
+    async def fetch_wallet_balance(self) -> float:
+        """Fetch USDC.e balance from Polygon RPC using raw eth_call (same pattern as chainlink_feed.py)."""
+        if not self._cfg.POLYGON_RPC_URL or not self._cfg.POLYMARKET_PROXY_WALLET:
+            return self._wallet_balance
+
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+
+        try:
+            # balanceOf(address) selector = 0x70a08231
+            # Pad address to 32 bytes (remove 0x prefix, left-pad with zeros)
+            addr = self._cfg.POLYMARKET_PROXY_WALLET.lower().replace("0x", "")
+            call_data = "0x70a08231" + addr.zfill(64)
+
+            payload = {
+                "jsonrpc": "2.0",
+                "method": "eth_call",
+                "params": [
+                    {
+                        "to": self._cfg.USDC_ADDRESS,
+                        "data": call_data,
+                    },
+                    "latest",
+                ],
+                "id": 1,
+            }
+
+            async with self._session.post(
+                self._cfg.POLYGON_RPC_URL,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            ) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    hex_balance = result.get("result", "0x0")
+                    raw_balance = int(hex_balance, 16)
+                    # USDC has 6 decimals
+                    self._wallet_balance = raw_balance / 1e6
+                    return self._wallet_balance
+                else:
+                    logger.warning("Balance fetch HTTP %d", resp.status)
+        except Exception as exc:
+            logger.warning("Failed to fetch wallet balance: %s", exc)
+
+        return self._wallet_balance
 
     async def stop(self) -> None:
         """Close HTTP session."""

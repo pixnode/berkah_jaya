@@ -154,6 +154,8 @@ class BotConfig:
 
     # ── BLOCKCHAIN & CLAIM ────────────────────────────
     POLYGON_GAS_TIP_MULTIPLIER: float = 1.0
+    USDC_ADDRESS: str = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+    BALANCE_REFRESH_INTERVAL_SEC: int = 30
     CLAIM_RETRY_MAX: int = 3
     CLAIM_RETRY_TIMEOUT_SEC: int = 30
     CLAIM_RETRY_INTERVAL_SEC: int = 60

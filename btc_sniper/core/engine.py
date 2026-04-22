@@ -105,6 +105,7 @@ class BotEngine:
             self._ui_exporter_loop(),
             self._periodic_state_flush(),
             self._periodic_snapshot_writer(),
+            self._periodic_balance_refresh(),
         ]
         
         for coro in coros:
@@ -581,7 +582,7 @@ class BotEngine:
         
         # Panel A: Header extras
         ds.wallet_type = self._claim_manager.wallet_type
-        ds.balance = self._paper_balance if self._cfg.PAPER_TRADING_MODE else 999.0  # Bypass balance check for Live mode until RPC fetcher is added
+        ds.balance = self._paper_balance if self._cfg.PAPER_TRADING_MODE else self._claim_manager.wallet_balance
         ds.unclaimed = self._claim_manager.unclaimed_balance
         ds.portfolio = ds.balance + ds.unclaimed
         ds.eoa_warning = self._claim_manager.eoa_warning
@@ -664,3 +665,22 @@ class BotEngine:
         while not self._shutdown.is_set():
             await asyncio.sleep(self._cfg.STATE_SNAPSHOT_INTERVAL_SEC)
             await self._audit_logger.flush_state(dict(self._engine_state))
+
+    async def _periodic_balance_refresh(self) -> None:
+        """Periodically fetch USDC.e balance from Polygon RPC."""
+        # Initial fetch on startup
+        if not self._cfg.PAPER_TRADING_MODE:
+            try:
+                bal = await self._claim_manager.fetch_wallet_balance()
+                logger.info("Initial balance: $%.2f USDC", bal)
+            except Exception as exc:
+                logger.warning("Initial balance fetch failed: %s", exc)
+
+        while not self._shutdown.is_set():
+            await asyncio.sleep(self._cfg.BALANCE_REFRESH_INTERVAL_SEC)
+            if not self._cfg.PAPER_TRADING_MODE:
+                try:
+                    bal = await self._claim_manager.fetch_wallet_balance()
+                    logger.debug("Balance refreshed: $%.2f USDC", bal)
+                except Exception as exc:
+                    logger.warning("Balance refresh failed: %s", exc)
