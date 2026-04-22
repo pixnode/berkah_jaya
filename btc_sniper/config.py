@@ -92,7 +92,7 @@ class BotConfig:
     GAP_THRESHOLD_HIGH_VOL: float = 35.0
     ATR_LOW_THRESHOLD: float = 50.0
     ATR_HIGH_THRESHOLD: float = 150.0
-    ATR_LOOKBACK_CANDLES: int = 12
+    ATR_LOOKBACK_CANDLES: int = 4
 
     # ── ODDS BOUNDARY ─────────────────────────────────
     ODDS_MIN: float = 0.01

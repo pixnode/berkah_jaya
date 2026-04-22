@@ -236,6 +236,18 @@ class SignalProcessor:
         else:
             self._state.vol_regime = "NORM"
             self._state.gap_threshold = self._cfg.GAP_THRESHOLD_DEFAULT
+        
+        self._apply_velocity_override()
+
+    def _apply_velocity_override(self) -> None:
+        """Override regime and threshold if price velocity is high (instant safety)."""
+        # Jika velocity tinggi (misal > 2x threshold normal), paksa ke mode HIGH VOL
+        v_abs = abs(self._state.velocity_1_5s)
+        if v_abs >= self._cfg.VELOCITY_MIN_DELTA * 1.5:
+            # Velocity spike terdeteksi — lebih responsif daripada ATR (candle 5m)
+            self._state.vol_regime = "SPIKE"
+            # Gunakan threshold yang lebih ketat untuk keamanan
+            self._state.gap_threshold = max(self._state.gap_threshold, self._cfg.GAP_THRESHOLD_HIGH_VOL)
 
     async def _background_calculations(self) -> None:
         """Tier 2: Periodic CVD and Velocity calculations (500ms)."""
@@ -280,6 +292,9 @@ class SignalProcessor:
                 v_data = [p for t, p in self._velocity_deque if now - t <= v_window]
                 self._state.velocity_1_5s = v_data[-1] - v_data[0] if len(v_data) >= 2 else 0.0
                 self._state.velocity_pass = abs(self._state.velocity_1_5s) >= self._cfg.VELOCITY_MIN_DELTA
+                
+                # Re-apply regime override in Tier 2 (every 500ms)
+                self._apply_velocity_override()
 
             except Exception as exc:
                 logger.error("Error in background calculations: %s", exc)
