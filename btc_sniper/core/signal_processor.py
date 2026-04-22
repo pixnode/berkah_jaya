@@ -40,7 +40,7 @@ class SignalState:
     strike_price: float = 0.0
     gap: float = 0.0
     gap_direction: str = "NEUTRAL"
-    gap_threshold: float = 45.0
+    gap_threshold: float = 0.0
     vol_regime: str = "NORM"
     atr: float = 0.0
     cvd_60s: float = 0.0
@@ -86,6 +86,7 @@ class SignalProcessor:
         # ── Current state ─────────────────────────────
         self._state = SignalState()
         self._state.cvd_threshold_pct = cfg.CVD_THRESHOLD_PCT
+        self._state.gap_threshold = cfg.GAP_THRESHOLD_DEFAULT
 
         # ── Latest events (instance level) ────────────
         self._latest_book: Optional[OrderBookEvent] = None
