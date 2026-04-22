@@ -180,11 +180,10 @@ class CircuitBreaker:
             # ══════════════════════════════════════════
             # STEP 2 — Pre-resume Checklist
             # ══════════════════════════════════════════
-            min_balance = (
-                self._cfg.BASE_SHARES
-                * self._cfg.MAX_POSITION_USD
-                * self._cfg.MIN_TRADE_RESERVE
-            )
+            min_balance = float(max(
+                self._cfg.MAX_POSITION_USD,
+                self._cfg.MIN_TRADE_RESERVE
+            ))
 
             checks = {
                 "hl_feed_connected": hl_feed_connected,
