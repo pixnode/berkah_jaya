@@ -443,23 +443,35 @@ class AuditLogger:
         match_value: str,
         updates: dict,
     ) -> None:
-        """Update rows in a CSV file that match a field value."""
+        """Update rows in a CSV file that match a field value. Robust matching."""
         if not path.exists():
             return
 
         try:
             rows = []
+            updated_count = 0
+            
+            # Read all rows
             with open(path, "r", encoding="utf-8", newline="") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
-                    if row.get(match_field) == match_value:
-                        row.update({k: str(v) for k, v in updates.items()})
+                    val = row.get(match_field, "")
+                    # Robust comparison: strip whitespace and ignore case
+                    if val and str(val).strip().lower() == str(match_value).strip().lower():
+                        row.update({k: str(v) if v is not None else "" for k, v in updates.items()})
+                        updated_count += 1
                     rows.append(row)
 
-            with open(path, "w", encoding="utf-8", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(rows)
+            # Rewrite if updated
+            if updated_count > 0:
+                with open(path, "w", encoding="utf-8", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                    writer.writeheader()
+                    writer.writerows(rows)
+                logger.info(f"AuditLogger: Updated {updated_count} rows in {path.name} for {match_field}={match_value}")
+            else:
+                logger.warning(f"AuditLogger: No rows found to update in {path.name} for {match_field}={match_value}")
+
         except Exception as exc:
             logger.error("Failed to update CSV %s: %s", path, exc)
 
