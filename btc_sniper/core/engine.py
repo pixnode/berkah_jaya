@@ -77,10 +77,14 @@ class BotEngine:
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(f"{self._cfg.CLOB_HOST}/auth/api-key", timeout=5) as resp:
-                        pass
-                    async with session.get(f"{self._cfg.RELAYER_URL}/health", timeout=5) as resp:
-                        if resp.status == 200:
-                            logger.info("CLOB connected ✓  Relayer: OK")
+                        if resp.status in (200, 401):  # 401 is fine, means endpoint is alive
+                            logger.info("CLOB API connected ✓")
+                    try:
+                        async with session.get(f"{self._cfg.RELAYER_URL}/health", timeout=5) as resp:
+                            if resp.status == 200:
+                                logger.info("Relayer API: OK")
+                    except Exception as relayer_err:
+                        logger.warning(f"Relayer API health check failed (DNS/Timeout): {relayer_err}. Continuing anyway...")
             except Exception as e:
                 raise RuntimeError(f"CLOB API connection failed — {e}")
 
