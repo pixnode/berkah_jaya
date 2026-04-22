@@ -73,6 +73,7 @@ class BotConfig:
     POLY_API_KEY: str = ""
     POLY_API_SECRET: str = ""
     POLY_API_PASSPHRASE: str = ""
+    CLOB_API_VERSION: str = "v1"
 
     # ── CONNECTIONS ───────────────────────────────────
     CLOB_HOST: str = "https://clob.polymarket.com"
@@ -194,6 +195,7 @@ def load_config(env_path: Optional[str] = None) -> BotConfig:
         POLY_API_KEY=_env_str("POLY_API_KEY", ""),
         POLY_API_SECRET=_env_str("POLY_API_SECRET", ""),
         POLY_API_PASSPHRASE=_env_str("POLY_API_PASSPHRASE", ""),
+        CLOB_API_VERSION=_env_str("CLOB_API_VERSION", "v1").lower(),
         CLOB_HOST=_env_str("CLOB_HOST", "https://clob.polymarket.com"),
         RELAYER_URL=_env_str("RELAYER_URL", "https://relayer.polymarket.com"),
         GAMMA_API_URL=_env_str("GAMMA_API_URL", "https://gamma-api.polymarket.com"),

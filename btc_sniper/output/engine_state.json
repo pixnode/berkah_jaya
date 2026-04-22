@@ -1,7 +1,7 @@
 {
-  "window_id": "btc-updown-5m-1776669900",
-  "t_remaining": 194,
-  "bot_mode": "INIT",
-  "_last_flush": "2026-04-20 07:26:46.253",
+  "window_id": "btc-updown-5m-1776769200",
+  "t_remaining": 167,
+  "bot_mode": "EXECUTE",
+  "_last_flush": "2026-04-21 11:02:13.846",
   "_bot_version": "2.3"
 }

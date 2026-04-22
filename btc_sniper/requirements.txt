@@ -7,6 +7,7 @@ python-dotenv>=1.0.0
 rich>=13.7.0
 web3>=6.15.0
 py-clob-client>=0.34.5
+py-clob-client-v2>=1.0.0
 aioconsole>=0.6.0
 pydantic
 pytest>=8.0.0

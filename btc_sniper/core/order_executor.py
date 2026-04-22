@@ -49,8 +49,44 @@ class OrderExecutor:
         self._cfg = cfg
         self._event_logger = event_logger
         self._session: Optional[aiohttp.ClientSession] = None
+        self._client_v1 = None
+        self._client_v2 = None
 
-    async def execute(self, gate_result: GateResult, window_id: str) -> OrderResult:
+        if not self._cfg.PAPER_TRADING_MODE:
+            self._init_clob_client()
+
+    def _init_clob_client(self) -> None:
+        """Initialize the specific CLOB client based on API version."""
+        funder = self._cfg.POLYMARKET_PROXY_WALLET if self._cfg.POLY_WALLET_TYPE == "safe" else None
+        
+        if self._cfg.CLOB_API_VERSION == "v2":
+            try:
+                from py_clob_client_v2.client import ClobClient as ClobClientV2
+                self._client_v2 = ClobClientV2(
+                    self._cfg.CLOB_HOST,
+                    key=self._cfg.POLYMARKET_PRIVATE_KEY,
+                    chain_id=self._cfg.POLY_CHAIN_ID,
+                    signature_type=2 if self._cfg.POLY_WALLET_TYPE != "safe" else 1,
+                    funder=funder
+                )
+                logger.info("Initialized CLOB Client V2 (Safe: %s)", self._cfg.POLY_WALLET_TYPE == "safe")
+            except ImportError as e:
+                logger.error("py-clob-client-v2 not installed: %s", e)
+        else:
+            try:
+                from py_clob_client.client import ClobClient as ClobClientV1
+                self._client_v1 = ClobClientV1(
+                    self._cfg.CLOB_HOST,
+                    key=self._cfg.POLYMARKET_PRIVATE_KEY,
+                    chain_id=self._cfg.POLY_CHAIN_ID,
+                    signature_type=2 if self._cfg.POLY_WALLET_TYPE != "safe" else 1,
+                    funder=funder
+                )
+                logger.info("Initialized CLOB Client V1 (Safe: %s)", self._cfg.POLY_WALLET_TYPE == "safe")
+            except ImportError as e:
+                logger.error("py-clob-client not installed: %s", e)
+
+    async def execute(self, gate_result: GateResult, token_id: str, window_id: str) -> OrderResult:
         """Execute an order based on gate evaluation result."""
         side = gate_result.side
         signal_odds = gate_result.target_ask
@@ -58,13 +94,13 @@ class OrderExecutor:
 
         if self._cfg.PAPER_TRADING_MODE:
             simulated_cost = self._cfg.BASE_SHARES * signal_odds
-            logger.info("[PAPER] Simulated %s fill: odds=%.3f, cost=$%.4f", side, signal_odds, simulated_cost)
+            logger.info("[PAPER] Simulated %s fill on Token %s: odds=%.3f, cost=$%.4f", side, token_id[:8], signal_odds, simulated_cost)
             return OrderResult("PAPER_FILL", window_id, side, signal_odds, self._cfg.BASE_SHARES, simulated_cost, 0.0, self._get_slippage_threshold(vol_regime), None, time.time(), 0, None, True)
 
         try:
-            live_odds = await self._fetch_live_odds(side, window_id)
+            live_odds = await self._fetch_live_odds(token_id)
         except Exception as exc:
-            logger.error("Failed to fetch live odds: %s", exc)
+            logger.error("Failed to fetch live odds for token %s: %s", token_id[:8], exc)
             return OrderResult("ERROR", window_id, side, signal_odds, None, None, 0.0, self._get_slippage_threshold(vol_regime), None, None, None, str(exc), False)
 
         slippage_delta = abs(live_odds - signal_odds) / signal_odds * 100.0 if signal_odds > 0 else 0.0
@@ -82,7 +118,7 @@ class OrderExecutor:
 
         t_submit = time.time()
         try:
-            tx_result = await self._submit_order(side, live_odds, window_id)
+            tx_result = await self._submit_order(live_odds, token_id)
         except Exception as exc:
             logger.error("Order submission error: %s", exc)
             return OrderResult("ERROR", window_id, side, live_odds, None, None, slippage_delta, slippage_threshold, None, None, None, str(exc), False)
@@ -96,33 +132,35 @@ class OrderExecutor:
         if vol_regime == "HIGH": return self._cfg.SLIPPAGE_THRESHOLD_HIGH
         return self._cfg.SLIPPAGE_THRESHOLD_NORMAL
 
-    async def _fetch_live_odds(self, side: Optional[str], window_id: str) -> float:
-        """Re-fetch current odds from Polymarket CLOB API."""
+    async def _fetch_live_odds(self, token_id: str) -> float:
+        """Re-fetch current odds from Polymarket CLOB API using specific Token ID."""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5))
-        url = f"https://clob.polymarket.com/book"
-        params = {"token_id": window_id}
+        url = f"{self._cfg.CLOB_HOST}/book"
+        params = {"token_id": token_id}
         async with self._session.get(url, params=params) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 asks = data.get("asks", [])
                 if asks:
-                    best_ask = float(asks[0].get("price", 0))
-                    if side == "DOWN": return round(1.0 - best_ask, 4) if best_ask > 0 else 0.0
-                    return best_ask
-            raise RuntimeError(f"HTTP {resp.status} fetching odds")
+                    return float(asks[0].get("price", 0))
+            raise RuntimeError(f"HTTP {resp.status} fetching odds for token {token_id[:8]}")
 
-    async def _submit_order(self, side: Optional[str], odds: float, window_id: str) -> dict:
+    async def _submit_order(self, odds: float, token_id: str) -> dict:
         """Build, sign, and submit order to Polymarket CLOB API."""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8))
         try:
-            from py_clob_client.client import ClobClient
-            from py_clob_client.clob_types import OrderArgs
-            client = ClobClient(host="https://clob.polymarket.com", key=self._cfg.POLYMARKET_PRIVATE_KEY, chain_id=137, signature_type=2)
-            order_args = OrderArgs(token_id=window_id, price=odds, size=self._cfg.BASE_SHARES)
-            signed_order = client.create_and_post_order(order_args)
-            return {"status": "FILLED", "tx_hash": signed_order.get("orderID", ""), "error": None}
+            if self._cfg.CLOB_API_VERSION == "v2" and self._client_v2:
+                from py_clob_client_v2.clob_types import OrderArgs
+                order_args = OrderArgs(token_id=token_id, price=odds, size=self._cfg.BASE_SHARES)
+                signed_order = self._client_v2.create_and_post_order(order_args)
+                return {"status": "FILLED", "tx_hash": signed_order.get("orderID", ""), "error": None}
+            elif self._client_v1:
+                from py_clob_client.clob_types import OrderArgs
+                order_args = OrderArgs(token_id=token_id, price=odds, size=self._cfg.BASE_SHARES)
+                signed_order = self._client_v1.create_and_post_order(order_args)
+                return {"status": "FILLED", "tx_hash": signed_order.get("orderID", ""), "error": None}
+            else:
+                return {"status": "REJECTED", "tx_hash": None, "error": "CLOB client not initialized"}
         except Exception as exc:
             return {"status": "REJECTED", "tx_hash": None, "error": str(exc)}
 

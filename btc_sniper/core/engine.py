@@ -133,6 +133,11 @@ class BotEngine:
                 self._order_sent = False
                 self._order_sent_up = False
                 self._order_sent_down = False
+                self._current_tokens = {}
+                
+                # Fetch exact Token IDs for the new window
+                asyncio.create_task(self._fetch_window_tokens(slug))
+                
                 if hasattr(self._signal_processor, "reset_cvd"):
                     self._signal_processor.reset_cvd()
                 logger.info(f"New window: {slug}")
@@ -199,6 +204,32 @@ class BotEngine:
 
             await asyncio.sleep(0.5)
 
+    async def _fetch_window_tokens(self, slug: str) -> None:
+        """Fetch exact Token IDs for UP and DOWN outcomes from Gamma API."""
+        try:
+            if self._fetch_session is None or self._fetch_session.closed:
+                self._fetch_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5))
+            
+            # Use specific User-Agent to bypass basic Cloudflare checks
+            headers = {"User-Agent": "Mozilla/5.0 (Polymarket-BTCSniper/2.3)"}
+            url = f"{self._cfg.GAMMA_API_URL}/markets?slug={slug}"
+            
+            async with self._fetch_session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data and isinstance(data, list) and len(data) > 0:
+                        tokens = data[0].get("tokens", [])
+                        for t in tokens:
+                            outcome = t.get("outcome", "").upper()
+                            token_id = t.get("token_id")
+                            if outcome in ("YES", "UP"):
+                                self._current_tokens["UP"] = token_id
+                            elif outcome in ("NO", "DOWN"):
+                                self._current_tokens["DOWN"] = token_id
+                        logger.info("Fetched tokens for %s: UP=%s, DOWN=%s", slug, self._current_tokens.get("UP", "None")[:8], self._current_tokens.get("DOWN", "None")[:8])
+        except Exception as exc:
+            logger.error("Failed to fetch window tokens for %s: %s", slug, exc)
+
     async def _handle_execution(self, slug: str) -> None:
         """Evaluate gates and execute order if all pass."""
         from risk.gates import GateEvaluator
@@ -218,7 +249,12 @@ class BotEngine:
             self._order_sent = True
             logger.info("🎯 TARGET ACQUIRED: %s at odds %.3f", gate_res.side, gate_res.target_ask)
             
-            order_res = await self._order_executor.execute(gate_res, slug)
+            target_token_id = self._current_tokens.get(gate_res.side)
+            if not target_token_id:
+                logger.error("Cannot execute %s: Missing token_id mapping!", gate_res.side)
+                return
+            
+            order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
             
             ss = self._signal_processor.state
             latest_odds = self._signal_processor.latest_odds
@@ -374,7 +410,8 @@ class BotEngine:
                 in_sweet_spot=True,
                 side="UP"
             )
-            order_res = await self._order_executor.execute(gate_res, slug)
+            target_token_id = self._current_tokens.get("UP")
+            order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
             if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
                 self._order_sent_up = True
                 await self._log_hedge_trade(slug, order_res, "HEDGE_UP")

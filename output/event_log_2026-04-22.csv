@@ -1,0 +1,4 @@
+timestamp,event_type,window_id,trigger,mode,details,gate_failed,state_snapshot_json
+2026-04-22 07:37:53.010,STARTUP,,engine,,All tasks launched,,{}
+2026-04-22 07:37:53.644,WS_RECONNECT,,hyperliquid,,connected,,{}
+2026-04-22 07:37:53.936,WS_RECONNECT,,polymarket,,connected,,{}
