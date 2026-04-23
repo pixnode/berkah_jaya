@@ -282,8 +282,8 @@ class PolymarketFeed:
             
             if asks:
                 raw_ask = float(asks[0].get("price", asks[0].get("px", 0)))
-                # Calculate depth USDC (Σ price * size) for prices <= 0.50
-                for a in asks:
+                # Calculate depth USDC (Σ price * size) for top 10 asks within price range
+                for a in asks[:10]:
                     p = float(a.get("price", a.get("px", 0)))
                     s = float(a.get("size", a.get("sz", 0)))
                     if 0.01 <= p <= 0.50:

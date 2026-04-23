@@ -167,7 +167,7 @@ class CircuitBreaker:
 
             if elapsed < required:
                 remaining = int(required - elapsed)
-                logger.info(
+                logger.debug(
                     "Resume denied: cooldown not elapsed (%ds / %ds)",
                     int(elapsed), required,
                 )
@@ -195,7 +195,7 @@ class CircuitBreaker:
 
             failed = [k for k, v in checks.items() if not v]
             if failed:
-                logger.info("Resume denied: failed checks: %s", failed)
+                logger.debug("Resume denied: failed checks: %s", failed)
                 return ResumeResult(
                     success=False,
                     reason="CHECKLIST_FAILED",

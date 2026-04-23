@@ -42,6 +42,7 @@ class BotEngine:
         self._paper_balance = 1000.0  # Saldo awal simulasi (Available to trade)
         self._current_tokens: Dict[str, str] = {}
         self._fetch_session = None
+        self._last_resume_check_t = 0
 
         # Components
         from logs.audit_logger import AuditLogger
@@ -182,7 +183,8 @@ class BotEngine:
             # Lockdown Auto-Resume logic (PRD v2.3 compliant Section 06)
             if self._circuit_breaker.is_lockdown:
                 # Try resume every 5 seconds or when a new window starts
-                if int(t_rem) % 5 == 0 or t_rem > 298:
+                if (int(t_rem) % 5 == 0 and int(t_rem) != self._last_resume_check_t) or t_rem > 298:
+                    self._last_resume_check_t = int(t_rem)
                     resume_res = await self._circuit_breaker.attempt_resume(
                         hl_feed_connected=self._hl_feed.is_connected,
                         poly_feed_connected=self._poly_feed.is_connected,
