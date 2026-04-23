@@ -197,10 +197,12 @@ class BotEngine:
 
             # Execution logic
             if mode == "EXECUTE" and not self._circuit_breaker.is_lockdown:
-                if self._cfg.HEDGE_MODE_ENABLED:
-                    await self._handle_hedge_execution(slug)
-                elif not self._order_sent:
-                    await self._handle_execution(slug)
+                if self._cfg.HEDGE_STRATEGY == 'SMART_HEDGE':
+                    await self._handle_smart_hedge(slug)
+                elif self._cfg.HEDGE_STRATEGY == 'TEMPORAL_HEDGE':
+                    await self._handle_temporal_hedge(slug)
+                elif self._cfg.HEDGE_STRATEGY == 'DIRECTIONAL' and not self._order_sent:
+                    await self._handle_directional(slug)
                 
             await asyncio.sleep(0.1)
 
@@ -235,7 +237,7 @@ class BotEngine:
         except Exception as exc:
             logger.error("Failed to fetch window tokens for %s: %s", slug, exc)
 
-    async def _handle_execution(self, slug: str) -> None:
+    async def _handle_directional(self, slug: str) -> None:
         """Evaluate gates and execute order if all pass."""
         from risk.gates import GateEvaluator
         from logs.audit_logger import TradeRecord, SkipRecord
@@ -349,8 +351,8 @@ class BotEngine:
             )
             await self._audit_logger.log_skip(skip)
 
-    async def _handle_hedge_execution(self, slug: str) -> None:
-        """Execute Hedge Strategy: Buy both sides if they are cheap enough."""
+    async def _handle_smart_hedge(self, slug: str) -> None:
+        """Execute Smart Hedge Strategy: Buy both sides ONLY if pair cost < threshold."""
         from logs.audit_logger import TradeRecord
         from risk.gates import GateResult
         
@@ -368,9 +370,9 @@ class BotEngine:
         pair_cost = up_odds + down_odds
 
         # CRITICAL FIX: PAIR COST CONTROL
-        if pair_cost >= self._cfg.HEDGE_PAIR_MAX_COST:
+        if pair_cost >= self._cfg.SMART_HEDGE_PAIR_MAX:
             from logs.audit_logger import SkipRecord
-            reason = f"HEDGE_PAIR_SKIP: pair cost ${pair_cost:.2f} >= max ${self._cfg.HEDGE_PAIR_MAX_COST:.2f}"
+            reason = f"SMART_HEDGE_SKIP: pair cost ${pair_cost:.2f} >= max ${self._cfg.SMART_HEDGE_PAIR_MAX:.2f}"
             logger.info("🛡️ %s", reason)
             
             skip = SkipRecord(
@@ -387,7 +389,7 @@ class BotEngine:
                 liquidity_gate_pass=True,
                 current_ask=pair_cost,
                 min_odds=0.0,
-                max_odds=self._cfg.HEDGE_PAIR_MAX_COST,
+                max_odds=self._cfg.SMART_HEDGE_PAIR_MAX,
                 odds_gate_pass=False,
                 golden_window_gate_pass=True,
                 velocity_gate_pass=True,
@@ -445,6 +447,71 @@ class BotEngine:
             if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
                 self._order_sent_down = True
                 await self._log_hedge_trade(slug, order_res, "HEDGE_DOWN")
+
+    async def _handle_temporal_hedge(self, slug: str) -> None:
+        """Execute Temporal Hedge Strategy: Buy cheapest side, track cost, buy other side later if total < max cost."""
+        from risk.gates import GateResult
+        
+        t_rem = get_time_remaining()
+        in_window = self._cfg.GOLDEN_WINDOW_END <= t_rem <= self._cfg.GOLDEN_WINDOW_START
+        if not in_window:
+            return
+
+        latest_odds = self._signal_processor.latest_odds
+        if not latest_odds:
+            return
+
+        up_odds = latest_odds.up_odds
+        down_odds = latest_odds.down_odds
+        
+        # Track cumulative cost of hedge positions in this window
+        if not hasattr(self, "_temporal_hedge_cost"):
+            self._temporal_hedge_cost = 0.0
+
+        # Reset cumulative cost if new window
+        if not hasattr(self, "_current_slug") or self._current_slug != slug:
+            self._temporal_hedge_cost = 0.0
+            self._current_slug = slug
+
+        # Try UP
+        if not self._order_sent_up and up_odds <= self._cfg.TEMPORAL_MAX_SINGLE_ODDS:
+            if self._temporal_hedge_cost + up_odds <= self._cfg.TEMPORAL_MAX_TOTAL_COST:
+                logger.info("⏳ TEMPORAL UP: odds %.3f. Total cost will be %.3f <= %.3f", 
+                            up_odds, self._temporal_hedge_cost + up_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
+                ss = self._signal_processor.state
+                gate_res = GateResult(
+                    all_pass=True, failed_gate=None, fail_reason=None, gate_statuses={i: True for i in range(1, 8)},
+                    evaluated_at=time.time(), signal_snapshot=ss, target_ask=up_odds, expected_odds=up_odds,
+                    in_sweet_spot=True, side="UP"
+                )
+                target_token_id = self._current_tokens.get("UP")
+                order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
+                if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
+                    self._order_sent_up = True
+                    self._temporal_hedge_cost += (order_res.entry_odds or up_odds)
+                    await self._log_hedge_trade(slug, order_res, "TEMPORAL_UP")
+            else:
+                logger.debug("⏳ TEMPORAL UP SKIP: Cost %.3f + %.3f > %.3f", self._temporal_hedge_cost, up_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
+
+        # Try DOWN
+        if not self._order_sent_down and down_odds <= self._cfg.TEMPORAL_MAX_SINGLE_ODDS:
+            if self._temporal_hedge_cost + down_odds <= self._cfg.TEMPORAL_MAX_TOTAL_COST:
+                logger.info("⏳ TEMPORAL DOWN: odds %.3f. Total cost will be %.3f <= %.3f", 
+                            down_odds, self._temporal_hedge_cost + down_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
+                ss = self._signal_processor.state
+                gate_res = GateResult(
+                    all_pass=True, failed_gate=None, fail_reason=None, gate_statuses={i: True for i in range(1, 8)},
+                    evaluated_at=time.time(), signal_snapshot=ss, target_ask=down_odds, expected_odds=down_odds,
+                    in_sweet_spot=True, side="DOWN"
+                )
+                target_token_id = self._current_tokens.get("DOWN")
+                order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
+                if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
+                    self._order_sent_down = True
+                    self._temporal_hedge_cost += (order_res.entry_odds or down_odds)
+                    await self._log_hedge_trade(slug, order_res, "TEMPORAL_DOWN")
+            else:
+                logger.debug("⏳ TEMPORAL DOWN SKIP: Cost %.3f + %.3f > %.3f", self._temporal_hedge_cost, down_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
 
     async def _log_hedge_trade(self, slug: str, order_res, mode: str) -> None:
         """Helper to log hedge trades and update dashboard."""

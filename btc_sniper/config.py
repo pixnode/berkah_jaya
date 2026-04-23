@@ -109,7 +109,14 @@ class BotConfig:
     # ── GATE TOGGLES ──────────────────────────────────
     GATE3_ENABLED: bool = True
 
-    # ── HEDGE MODE ────────────────────────────────────
+    # ── STRATEGY MODES ────────────────────────────────
+    HEDGE_STRATEGY: str = "DIRECTIONAL"
+    DIRECTIONAL_MAX_ODDS: float = 0.40
+    SMART_HEDGE_PAIR_MAX: float = 0.95
+    TEMPORAL_MAX_SINGLE_ODDS: float = 0.50
+    TEMPORAL_MAX_TOTAL_COST: float = 0.95
+
+    # ── HEDGE MODE (Legacy/General) ───────────────────
     HEDGE_MODE_ENABLED: bool = False
     HEDGE_MODE_ODDS_MAX: float = 0.50
     HEDGE_PAIR_MAX_COST: float = 0.35
@@ -222,6 +229,11 @@ def load_config(env_path: Optional[str] = None) -> BotConfig:
         CVD_THRESHOLD_PCT=_env_float("CVD_THRESHOLD_PCT", 25.0),
         CVD_CALC_INTERVAL_MS=_env_int("CVD_CALC_INTERVAL_MS", 500),
         GATE3_ENABLED=_env_bool("GATE3_ENABLED", True),
+        HEDGE_STRATEGY=_env_str("HEDGE_STRATEGY", "DIRECTIONAL"),
+        DIRECTIONAL_MAX_ODDS=_env_float("DIRECTIONAL_MAX_ODDS", 0.40),
+        SMART_HEDGE_PAIR_MAX=_env_float("SMART_HEDGE_PAIR_MAX", 0.95),
+        TEMPORAL_MAX_SINGLE_ODDS=_env_float("TEMPORAL_MAX_SINGLE_ODDS", 0.50),
+        TEMPORAL_MAX_TOTAL_COST=_env_float("TEMPORAL_MAX_TOTAL_COST", 0.95),
         HEDGE_MODE_ENABLED=_env_bool("HEDGE_MODE_ENABLED", False),
         HEDGE_MODE_ODDS_MAX=_env_float("HEDGE_MODE_ODDS_MAX", 0.50),
         HEDGE_PAIR_MAX_COST=_env_float("HEDGE_PAIR_MAX_COST", 0.35),
