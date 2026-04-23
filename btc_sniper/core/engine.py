@@ -4,7 +4,8 @@
 from __future__ import annotations
 import asyncio, json, logging, time, os
 from datetime import datetime, timezone
-from typing import Optional, Set
+from typing import Optional, Set, Dict
+import aiohttp
 from config import BotConfig
 
 logger = logging.getLogger("btc_sniper.core.engine")
@@ -214,30 +215,43 @@ class BotEngine:
             await asyncio.sleep(0.5)
 
     async def _fetch_window_tokens(self, slug: str) -> None:
-        """Fetch exact Token IDs for UP and DOWN outcomes from Gamma API."""
-        try:
-            if self._fetch_session is None or self._fetch_session.closed:
-                self._fetch_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5))
-            
-            # Use specific User-Agent to bypass basic Cloudflare checks
-            headers = {"User-Agent": "Mozilla/5.0 (Polymarket-BTCSniper/2.3)"}
-            url = f"{self._cfg.GAMMA_API_URL}/markets?slug={slug}"
-            
-            async with self._fetch_session.get(url, headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data and isinstance(data, list) and len(data) > 0:
-                        tokens = data[0].get("tokens", [])
-                        for t in tokens:
-                            outcome = t.get("outcome", "").upper()
-                            token_id = t.get("token_id")
-                            if outcome in ("YES", "UP"):
-                                self._current_tokens["UP"] = token_id
-                            elif outcome in ("NO", "DOWN"):
-                                self._current_tokens["DOWN"] = token_id
-                        logger.info("Fetched tokens for %s: UP=%s, DOWN=%s", slug, self._current_tokens.get("UP", "None")[:8], self._current_tokens.get("DOWN", "None")[:8])
-        except Exception as exc:
-            logger.error("Failed to fetch window tokens for %s: %s", slug, exc)
+        """Fetch exact Token IDs for UP and DOWN outcomes from Gamma API with retries."""
+        max_retries = 15
+        for attempt in range(max_retries):
+            try:
+                if self._fetch_session is None or self._fetch_session.closed:
+                    self._fetch_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5))
+                
+                # Use specific User-Agent to bypass basic Cloudflare checks
+                headers = {"User-Agent": "Mozilla/5.0 (Polymarket-BTCSniper/2.3)"}
+                url = f"{self._cfg.GAMMA_API_URL}/markets?slug={slug}"
+                
+                async with self._fetch_session.get(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data and isinstance(data, list) and len(data) > 0:
+                            tokens = data[0].get("tokens", [])
+                            if tokens:
+                                for t in tokens:
+                                    outcome = t.get("outcome", "").upper()
+                                    token_id = t.get("token_id")
+                                    if outcome in ("YES", "UP"):
+                                        self._current_tokens["UP"] = token_id
+                                    elif outcome in ("NO", "DOWN"):
+                                        self._current_tokens["DOWN"] = token_id
+                                logger.info("Fetched tokens for %s: UP=%s, DOWN=%s", slug, self._current_tokens.get("UP", "None")[:8], self._current_tokens.get("DOWN", "None")[:8])
+                                return # Success, exit retry loop
+                    
+                # If we get here, either status != 200 or data was empty/missing tokens
+                if attempt < max_retries - 1:
+                    logger.debug("Tokens for %s not ready yet (attempt %d). Retrying in 2s...", slug, attempt + 1)
+                    await asyncio.sleep(2)
+            except Exception as exc:
+                logger.error("Failed to fetch window tokens for %s (attempt %d): %s", slug, attempt + 1, exc)
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+        
+        logger.error("Giving up fetching tokens for %s after %d attempts.", slug, max_retries)
 
     async def _handle_directional(self, slug: str) -> None:
         """Evaluate gates and execute order if all pass."""
