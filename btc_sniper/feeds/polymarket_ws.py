@@ -187,13 +187,20 @@ class PolymarketFeed:
             if down_id: ids_to_sub.append(down_id)
             
             if not ids_to_sub:
-                # If no IDs yet, we subscribe to the market slug as fallback 
-                # (Polymarket WS supports slug subscription for some channels)
+                # If no IDs yet, we subscribe to the market slug as fallback
                 logger.warning("No token IDs available for %s yet, subscribing to slug", market_slug)
-                payload = {"assets_ids": [market_slug], "type": "market"}
+                payload = {
+                    "type": "subscribe",
+                    "assets_ids": [market_slug],
+                    "channels": ["book"]
+                }
             else:
                 logger.info("Subscribing to WebSocket for tokens: %s", ids_to_sub)
-                payload = {"assets_ids": ids_to_sub, "type": "market"}
+                payload = {
+                    "type": "subscribe",
+                    "assets_ids": ids_to_sub,
+                    "channels": ["book"]
+                }
 
             await self._ws.send(json.dumps(payload))
             
