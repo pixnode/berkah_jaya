@@ -292,31 +292,49 @@ class PolymarketFeed:
             if bids:
                 raw_bid = float(bids[0].get("price", bids[0].get("px", 0)))
                 
-            # Robust ID identification
+            # Flexible ID identification
             asset_id = str(data.get("market", data.get("asset_id", ""))).strip()
             up_id = str(getattr(self, "_up_token_id", "")).strip()
             down_id = str(getattr(self, "_down_token_id", "")).strip()
 
-            if asset_id == down_id and down_id != "":
+            # If IDs are not set, we try to guess based on order of arrival (fallback)
+            if not up_id and not down_id:
+                # No IDs injected yet, but we got a message? Use it.
+                self._up_token_id = asset_id
+                up_id = asset_id
+                logger.info("PolymarketFeed: Auto-assigned unknown ID to UP slot: %s", asset_id)
+
+            if asset_id == down_id:
                 self._down_depth_usdc = current_depth
                 down_ask = raw_ask
                 down_bid = raw_bid
                 up_bid = round(1.0 - down_ask, 4) if down_ask > 0 else 0.0
                 up_ask = round(1.0 - down_bid, 4) if down_bid > 0 else 0.0
-            elif asset_id == up_id and up_id != "":
+            elif asset_id == up_id:
                 self._up_depth_usdc = current_depth
                 up_ask = raw_ask
                 up_bid = raw_bid
                 down_bid = round(1.0 - up_ask, 4) if up_ask > 0 else 0.0
                 down_ask = round(1.0 - up_bid, 4) if up_bid > 0 else 0.0
             else:
-                # Diagnostics: log why it failed
-                now = time.time()
-                if not hasattr(self, "_last_unknown_log"): self._last_unknown_log = 0
-                if now - self._last_unknown_log > 10:
-                    self._last_unknown_log = now
-                    logger.debug("Polymarket: Asset ID mismatch. Received: %s | Expected UP: %s, DOWN: %s", asset_id, up_id, down_id)
-                return
+                # If we have IDs but this one doesn't match, maybe it's the OTHER one we missed?
+                # Let's be aggressive: if we only have UP and this is different, assume it's DOWN.
+                if up_id and not down_id:
+                    self._down_token_id = asset_id
+                    down_id = asset_id
+                    logger.info("PolymarketFeed: Auto-assigned unknown ID to DOWN slot: %s", asset_id)
+                elif down_id and not up_id:
+                    self._up_token_id = asset_id
+                    up_id = asset_id
+                    logger.info("PolymarketFeed: Auto-assigned unknown ID to UP slot: %s", asset_id)
+                else:
+                    # Diagnostics: log mismatch
+                    now = time.time()
+                    if not hasattr(self, "_last_unknown_log"): self._last_unknown_log = 0
+                    if now - self._last_unknown_log > 10:
+                        self._last_unknown_log = now
+                        logger.info("Polymarket: Asset ID mismatch. Received: %s | Expected UP: %s, DOWN: %s", asset_id, up_id, down_id)
+                    return
 
             mid = (up_ask + up_bid) / 2.0 if (up_ask > 0 and up_bid > 0) else 1.0
             spread_pct = ((up_ask - up_bid) / mid * 100.0) if mid > 0 else 0.0
