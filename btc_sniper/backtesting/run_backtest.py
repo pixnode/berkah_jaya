@@ -2,16 +2,23 @@ import random
 from dataclasses import dataclass
 from typing import List, Dict, Optional
 
+import os
+import sys
+from dotenv import dotenv_values
+
+env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
+env_dict = dotenv_values(env_path)
+
 # Constants for simulation
-NUM_WINDOWS = 500
+NUM_WINDOWS = 1000
 STARTING_BALANCE = 100.0
 BASE_BET = 1.0
 
-# Strategy configs
-DIRECTIONAL_MAX_ODDS = 0.40
-SMART_HEDGE_PAIR_MAX = 0.95
-TEMPORAL_MAX_SINGLE_ODDS = 0.50
-TEMPORAL_MAX_TOTAL_COST = 0.95
+# Strategy configs (loaded from .env)
+DIRECTIONAL_MAX_ODDS = float(env_dict.get('DIRECTIONAL_MAX_ODDS', 0.65))
+SMART_HEDGE_PAIR_MAX = float(env_dict.get('SMART_HEDGE_PAIR_MAX', 0.95))
+TEMPORAL_MAX_SINGLE_ODDS = float(env_dict.get('TEMPORAL_MAX_SINGLE_ODDS', 0.50))
+TEMPORAL_MAX_TOTAL_COST = float(env_dict.get('TEMPORAL_MAX_TOTAL_COST', 0.95))
 
 @dataclass
 class WindowData:
