@@ -39,6 +39,8 @@ class BotEngine:
         self._engine_state = {"window_id": "—", "t_remaining": 0, "bot_mode": "INIT"}
         self._last_subscribed_slug: Optional[str] = None
         self._paper_balance = 1000.0  # Saldo awal simulasi (Available to trade)
+        self._current_tokens: Dict[str, str] = {}
+        self._fetch_session = None
 
         # Components
         from logs.audit_logger import AuditLogger
@@ -418,6 +420,9 @@ class BotEngine:
                 side="UP"
             )
             target_token_id = self._current_tokens.get("UP")
+            if not target_token_id:
+                logger.error("Cannot execute SMART HEDGE UP: Missing token_id!")
+                return
             order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
             if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
                 self._order_sent_up = True
@@ -485,6 +490,9 @@ class BotEngine:
                     in_sweet_spot=True, side="UP"
                 )
                 target_token_id = self._current_tokens.get("UP")
+                if not target_token_id:
+                    logger.error("Cannot execute TEMPORAL HEDGE UP: Missing token_id!")
+                    return
                 order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
                 if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
                     self._order_sent_up = True
@@ -505,6 +513,9 @@ class BotEngine:
                     in_sweet_spot=True, side="DOWN"
                 )
                 target_token_id = self._current_tokens.get("DOWN")
+                if not target_token_id:
+                    logger.error("Cannot execute TEMPORAL HEDGE DOWN: Missing token_id!")
+                    return
                 order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
                 if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
                     self._order_sent_down = True
