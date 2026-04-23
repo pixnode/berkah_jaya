@@ -43,6 +43,7 @@ class BotEngine:
         self._current_tokens: Dict[str, str] = {}
         self._fetch_session = None
         self._last_resume_check_t = 0
+        self._last_heartbeat_t = 0
 
         # Components
         from logs.audit_logger import AuditLogger
@@ -179,6 +180,15 @@ class BotEngine:
 
             # Update dashboard state from components
             self._sync_dashboard()
+
+            # Periodic Heartbeat Log (Every 30 seconds)
+            if int(t_rem) % 30 == 0 and int(t_rem) != self._last_heartbeat_t:
+                self._last_heartbeat_t = int(t_rem)
+                ss = self._signal_processor.state
+                logger.info(
+                    "💓 [HEARTBEAT] Window: %s | Mode: %s | Gap: $%.1f | CVD: %.1f%% | Odds: %.2f/%.2f",
+                    slug, mode, ss.gap, ss.cvd_60s, ss.up_odds, ss.down_odds
+                )
 
             # Lockdown Auto-Resume logic (PRD v2.3 compliant Section 06)
             if self._circuit_breaker.is_lockdown:
