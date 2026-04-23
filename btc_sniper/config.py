@@ -112,9 +112,9 @@ class BotConfig:
     # ── STRATEGY MODES ────────────────────────────────
     HEDGE_STRATEGY: str = "DIRECTIONAL"
     DIRECTIONAL_MAX_ODDS: float = 0.40
-    SMART_HEDGE_PAIR_MAX: float = 0.95
-    TEMPORAL_MAX_SINGLE_ODDS: float = 0.50
-    TEMPORAL_MAX_TOTAL_COST: float = 0.95
+    SMART_HEDGE_PAIR_MAX: float = 0.80
+    TEMPORAL_MAX_SINGLE_ODDS: float = 0.40
+    TEMPORAL_MAX_TOTAL_COST: float = 0.80
     HEDGE_MIN_DEPTH_USDC: float = 50.0
 
     # ── HEDGE MODE (Legacy/General) ───────────────────
@@ -130,9 +130,10 @@ class BotConfig:
     VELOCITY_WINDOW_SECONDS: float = 1.5
 
     # ── SLIPPAGE ──────────────────────────────────────
-    SLIPPAGE_THRESHOLD_NORMAL: float = 1.0
-    SLIPPAGE_THRESHOLD_ELEVATED: float = 1.5
-    SLIPPAGE_THRESHOLD_HIGH: float = 2.0
+    SLIPPAGE_THRESHOLD_NORMAL: float = 5.0
+    SLIPPAGE_THRESHOLD_ELEVATED: float = 7.0
+    SLIPPAGE_THRESHOLD_HIGH: float = 10.0
+    SLIPPAGE_THRESHOLD_ABS_LOW_ODDS: float = 0.05
     SPREAD_MAX_PCT: float = 3.0
     MISPRICING_MULTIPLIER: float = 0.15
     MISPRICING_MIN_EDGE: float = 0.02
@@ -232,9 +233,9 @@ def load_config(env_path: Optional[str] = None) -> BotConfig:
         GATE3_ENABLED=_env_bool("GATE3_ENABLED", True),
         HEDGE_STRATEGY=_env_str("HEDGE_STRATEGY", "DIRECTIONAL"),
         DIRECTIONAL_MAX_ODDS=_env_float("DIRECTIONAL_MAX_ODDS", 0.40),
-        SMART_HEDGE_PAIR_MAX=_env_float("SMART_HEDGE_PAIR_MAX", 0.95),
-        TEMPORAL_MAX_SINGLE_ODDS=_env_float("TEMPORAL_MAX_SINGLE_ODDS", 0.50),
-        TEMPORAL_MAX_TOTAL_COST=_env_float("TEMPORAL_MAX_TOTAL_COST", 0.95),
+        SMART_HEDGE_PAIR_MAX=_env_float("SMART_HEDGE_PAIR_MAX", 0.80),
+        TEMPORAL_MAX_SINGLE_ODDS=_env_float("TEMPORAL_MAX_SINGLE_ODDS", 0.40),
+        TEMPORAL_MAX_TOTAL_COST=_env_float("TEMPORAL_MAX_TOTAL_COST", 0.80),
         HEDGE_MIN_DEPTH_USDC=_env_float("HEDGE_MIN_DEPTH_USDC", 50.0),
         HEDGE_MODE_ENABLED=_env_bool("HEDGE_MODE_ENABLED", False),
         HEDGE_MODE_ODDS_MAX=_env_float("HEDGE_MODE_ODDS_MAX", 0.50),
@@ -244,9 +245,10 @@ def load_config(env_path: Optional[str] = None) -> BotConfig:
         VELOCITY_WINDOW_SECONDS=_env_float("VELOCITY_WINDOW_SECONDS", 1.5),
         GOLDEN_WINDOW_START=_env_int("GOLDEN_WINDOW_START", 60),
         GOLDEN_WINDOW_END=_env_int("GOLDEN_WINDOW_END", 42),
-        SLIPPAGE_THRESHOLD_NORMAL=_env_float("SLIPPAGE_THRESHOLD_NORMAL", 1.0),
-        SLIPPAGE_THRESHOLD_ELEVATED=_env_float("SLIPPAGE_THRESHOLD_ELEVATED", 1.5),
-        SLIPPAGE_THRESHOLD_HIGH=_env_float("SLIPPAGE_THRESHOLD_HIGH", 2.0),
+        SLIPPAGE_THRESHOLD_NORMAL=_env_float("SLIPPAGE_THRESHOLD_NORMAL", 5.0),
+        SLIPPAGE_THRESHOLD_ELEVATED=_env_float("SLIPPAGE_THRESHOLD_ELEVATED", 7.0),
+        SLIPPAGE_THRESHOLD_HIGH=_env_float("SLIPPAGE_THRESHOLD_HIGH", 10.0),
+        SLIPPAGE_THRESHOLD_ABS_LOW_ODDS=_env_float("SLIPPAGE_THRESHOLD_ABS_LOW_ODDS", 0.05),
         SPREAD_MAX_PCT=_env_float("SPREAD_MAX_PCT", 3.0),
         MISPRICING_MULTIPLIER=_env_float("MISPRICING_MULTIPLIER", 0.15),
         MISPRICING_MIN_EDGE=_env_float("MISPRICING_MIN_EDGE", 0.02),

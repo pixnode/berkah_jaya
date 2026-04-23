@@ -442,6 +442,7 @@ class BotEngine:
             return
 
         if not self._order_sent_up:
+            # BUG 1 FIXED: Indentasi diperbaiki, seluruh eksekusi masuk ke dalam if depth
             # KONDISI 1: Harga valid (Best Ask)
             # KONDISI 2: Depth cukup
             if up_odds <= self._cfg.ODDS_MAX and latest_book.up_ask_depth_usdc >= self._cfg.HEDGE_MIN_DEPTH_USDC:
@@ -467,6 +468,7 @@ class BotEngine:
         
         # Beli DOWN
         if not self._order_sent_down:
+            # BUG 1 FIXED: Indentasi diperbaiki, seluruh eksekusi masuk ke dalam if depth
             # KONDISI 1: Harga valid (Best Ask)
             # KONDISI 2: Depth cukup
             if down_odds <= self._cfg.ODDS_MAX and latest_book.down_ask_depth_usdc >= self._cfg.HEDGE_MIN_DEPTH_USDC:

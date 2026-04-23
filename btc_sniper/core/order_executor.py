@@ -118,14 +118,24 @@ class OrderExecutor:
             logger.error("Failed to fetch live odds for token %s: %s", token_id[:8], exc)
             return OrderResult("ERROR", window_id, side, signal_odds, None, None, 0.0, self._get_slippage_threshold(vol_regime), None, None, None, str(exc), False)
 
-        slippage_delta = abs(live_odds - signal_odds) / signal_odds * 100.0 if signal_odds > 0 else 0.0
-        slippage_threshold = self._get_slippage_threshold(vol_regime)
+        # MASALAH 4 FIXED: Slippage threshold specialized for low odds
+        if signal_odds < 0.10:
+            # FIX 1 — Gunakan absolute delta untuk odds rendah
+            slippage_delta = abs(live_odds - signal_odds)
+            slippage_threshold = self._cfg.SLIPPAGE_THRESHOLD_ABS_LOW_ODDS
+            is_exceeded = slippage_delta > slippage_threshold
+            log_msg = f"SLIPPAGE_ABS: signal={signal_odds:.3f} live={live_odds:.3f} delta={slippage_delta:+.3f} > threshold={slippage_threshold:.3f} — LOW ODDS ABSOLUTE CHECK"
+        else:
+            # Untuk odds normal, gunakan percentage
+            slippage_delta = abs(live_odds - signal_odds) / signal_odds * 100.0 if signal_odds > 0 else 0.0
+            slippage_threshold = self._get_slippage_threshold(vol_regime)
+            is_exceeded = slippage_delta > slippage_threshold
+            log_msg = f"SLIPPAGE_PCT: signal={signal_odds:.3f} live={live_odds:.3f} delta={slippage_delta:.2f}% > threshold={slippage_threshold:.2f}% — order book depth habis"
 
-        if slippage_delta > slippage_threshold:
-            logger.warning("SLIPPAGE_EXCEEDED: reference=$%.3f (book_ask) live=$%.3f (api) delta=%.2f%% — order book depth habis sejak signal", 
-                           signal_odds, live_odds, slippage_delta)
-            await self._log_event("SLIPPAGE_EXCEEDED", window_id, f"delta={slippage_delta:.2f}% > threshold={slippage_threshold:.2f}%")
-            return OrderResult("SLIPPAGE_EXCEEDED", window_id, side, live_odds, None, None, slippage_delta, slippage_threshold, None, None, None, f"Slippage {slippage_delta:.2f}% exceeded {slippage_threshold:.2f}%", False)
+        if is_exceeded:
+            logger.warning(log_msg)
+            await self._log_event("SLIPPAGE_EXCEEDED", window_id, log_msg)
+            return OrderResult("SLIPPAGE_EXCEEDED", window_id, side, live_odds, None, None, slippage_delta, slippage_threshold, None, None, None, log_msg, False)
 
         cost_estimate = self._cfg.BASE_SHARES * live_odds
         if cost_estimate > self._cfg.MAX_POSITION_USD:

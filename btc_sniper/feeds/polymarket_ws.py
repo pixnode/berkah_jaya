@@ -258,7 +258,7 @@ class PolymarketFeed:
         if msg_type == "book" or event_type == "book":
             await self._handle_book_update(data)
         elif msg_type in ("price_change", "last_trade_price") or event_type in ("price_change", "last_trade_price"):
-            await self._handle_price_change(data)
+            pass  # Diabaikan — kita hanya pakai order book untuk pricing
         elif msg_type == "tick_size_change":
             pass
         elif msg_type == "error":
@@ -331,13 +331,6 @@ class PolymarketFeed:
 
         except (KeyError, ValueError, TypeError, IndexError) as exc:
             logger.debug("Polymarket: failed to parse book update: %s", exc)
-
-            # REFACTOR: JANGAN gunakan last_trade_price untuk pricing sama sekali.
-            # Kita hanya mengandalkan _handle_book_update untuk emisi OddsEvent.
-            pass
-
-        except (KeyError, ValueError, TypeError, IndexError) as exc:
-            logger.debug("Polymarket: failed to parse price change: %s", exc)
 
     async def _emit(self, event: object) -> None:
         """Put event into the queue."""
