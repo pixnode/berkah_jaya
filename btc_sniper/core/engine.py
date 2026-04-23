@@ -230,7 +230,8 @@ class BotEngine:
                     if resp.status == 200:
                         data = await resp.json()
                         if data and isinstance(data, list) and len(data) > 0:
-                            tokens = data[0].get("tokens", [])
+                            market_data = data[0]
+                            tokens = market_data.get("tokens", [])
                             if tokens:
                                 for t in tokens:
                                     outcome = t.get("outcome", "").upper()
@@ -239,7 +240,25 @@ class BotEngine:
                                         self._current_tokens["UP"] = token_id
                                     elif outcome in ("NO", "DOWN"):
                                         self._current_tokens["DOWN"] = token_id
-                                logger.info("Fetched tokens for %s: UP=%s, DOWN=%s", slug, self._current_tokens.get("UP", "None")[:8], self._current_tokens.get("DOWN", "None")[:8])
+                            else:
+                                # Fallback to clobTokenIds if tokens array is lagging
+                                clob_token_ids_str = market_data.get("clobTokenIds", "[]")
+                                outcomes_str = market_data.get("outcomes", "[]")
+                                try:
+                                    clob_token_ids = json.loads(clob_token_ids_str)
+                                    outcomes = json.loads(outcomes_str)
+                                    if len(clob_token_ids) == len(outcomes):
+                                        for idx, outcome in enumerate(outcomes):
+                                            outcome_upper = outcome.upper()
+                                            if outcome_upper in ("YES", "UP"):
+                                                self._current_tokens["UP"] = clob_token_ids[idx]
+                                            elif outcome_upper in ("NO", "DOWN"):
+                                                self._current_tokens["DOWN"] = clob_token_ids[idx]
+                                except Exception as e:
+                                    logger.warning("Failed to parse clobTokenIds fallback: %s", e)
+                            
+                            if self._current_tokens.get("UP") and self._current_tokens.get("DOWN"):
+                                logger.info("Fetched tokens for %s: UP=%s, DOWN=%s", slug, self._current_tokens.get("UP")[:8], self._current_tokens.get("DOWN")[:8])
                                 return # Success, exit retry loop
                     
                 # If we get here, either status != 200 or data was empty/missing tokens
