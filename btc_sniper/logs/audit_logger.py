@@ -303,16 +303,19 @@ class AuditLogger:
 
                 data = json.dumps(state, indent=2, default=str)
 
-                # Write to temp file first
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    f.write(data)
-                    f.flush()
-                    os.fsync(f.fileno())
+                def _do_flush():
+                    # Write to temp file first
+                    with open(tmp_path, "w", encoding="utf-8") as f:
+                        f.write(data)
+                        f.flush()
+                        os.fsync(f.fileno())
 
-                # Atomic rename (on same filesystem)
-                if state_path.exists():
-                    state_path.unlink()
-                tmp_path.rename(state_path)
+                    # Atomic rename (on same filesystem)
+                    if state_path.exists():
+                        state_path.unlink()
+                    tmp_path.rename(state_path)
+
+                await asyncio.to_thread(_do_flush)
 
             except Exception as exc:
                 logger.error("Failed to flush engine state: %s", exc)
@@ -365,9 +368,9 @@ class AuditLogger:
             if not path.exists():
                 return
 
-            rows = []
-            updated = False
-            try:
+            def _do_update():
+                rows = []
+                updated = False
                 with open(path, "r", encoding="utf-8", newline="") as f:
                     reader = csv.DictReader(f)
                     for row in reader:
@@ -384,6 +387,10 @@ class AuditLogger:
                         writer = csv.DictWriter(f, fieldnames=SKIP_LOG_FIELDS)
                         writer.writeheader()
                         writer.writerows(rows)
+                return updated
+
+            try:
+                updated = await asyncio.to_thread(_do_update)
             except Exception as exc:
                 logger.error("Failed to update skip would_have_won: %s", exc)
 
@@ -422,8 +429,7 @@ class AuditLogger:
     async def _append_csv(
         self, path: Path, fieldnames: list[str], row: dict,
     ) -> None:
-        """Append a single row to a CSV file. Creates header if file is new."""
-        try:
+        def _do_append():
             file_exists = path.exists() and path.stat().st_size > 0
             with open(path, "a", encoding="utf-8", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -432,6 +438,9 @@ class AuditLogger:
                 # Ensure all fields are present (fill missing with empty)
                 clean_row = {k: row.get(k, "") for k in fieldnames}
                 writer.writerow(clean_row)
+
+        try:
+            await asyncio.to_thread(_do_append)
         except Exception as exc:
             logger.error("Failed to write CSV %s: %s", path, exc)
 

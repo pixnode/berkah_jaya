@@ -314,7 +314,12 @@ class PolymarketFeed:
                 down_ask = round(1.0 - up_bid, 4) if up_bid > 0 else 0.0
                 logger.debug("Polymarket: Updated UP token data (ID: %s)", asset_id)
             else:
-                # Ignore messages for tokens not belonging to the current window
+                # Log unknown tokens at INFO level occasionally to diagnose mismatch
+                now = time.time()
+                if not hasattr(self, "_last_unknown_log"): self._last_unknown_log = 0
+                if now - self._last_unknown_log > 30:
+                    self._last_unknown_log = now
+                    logger.info("Polymarket: Ignoring unknown asset_id: %s (Expected UP: %s, DOWN: %s)", asset_id, up_id, down_id)
                 return
 
             mid = (up_ask + up_bid) / 2.0 if (up_ask > 0 and up_bid > 0) else 1.0
