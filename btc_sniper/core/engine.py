@@ -219,12 +219,12 @@ class BotEngine:
                 elif self._cfg.HEDGE_STRATEGY == 'DIRECTIONAL' and not self._order_sent:
                     await self._handle_directional(slug)
                 
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
 
             if self._dashboard.quit_requested:
                 self._shutdown.set()
 
-            await asyncio.sleep(0.5)
+
 
     async def _fetch_window_tokens(self, slug: str) -> None:
         """Fetch exact Token IDs for UP and DOWN outcomes from Gamma API with retries."""

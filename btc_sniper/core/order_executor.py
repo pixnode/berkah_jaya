@@ -127,11 +127,16 @@ class OrderExecutor:
             )
 
         # ── LIVE MODE LOGIC ───────────────────────────────────────
-        try:
-            live_odds = await self._fetch_live_odds(token_id)
-        except Exception as exc:
-            logger.error("Failed to fetch live odds for token %s: %s", token_id[:8], exc)
-            return OrderResult("ERROR", window_id, side, signal_odds, None, None, 0.0, 0.0, None, None, None, str(exc), False)
+        # SPEED OPTIMIZATION: Use WebSocket signal_odds directly to avoid ~300ms REST delay.
+        live_odds = signal_odds
+        
+        # Optional: Re-fetch REST odds only if explicit safety check is required.
+        if getattr(self._cfg, "USE_REST_FOR_SLIPPAGE", False):
+            try:
+                live_odds = await self._fetch_live_odds(token_id)
+            except Exception as exc:
+                logger.error("Failed to fetch live odds for token %s: %s", token_id[:8], exc)
+                return OrderResult("ERROR", window_id, side, signal_odds, None, None, 0.0, 0.0, None, None, None, str(exc), False)
 
         # ── Slippage Calculation ──
         if signal_odds < 0.10:
