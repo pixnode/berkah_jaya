@@ -115,6 +115,7 @@ class BotConfig:
     SMART_HEDGE_PAIR_MAX: float = 0.95
     TEMPORAL_MAX_SINGLE_ODDS: float = 0.50
     TEMPORAL_MAX_TOTAL_COST: float = 0.95
+    HEDGE_MIN_DEPTH_USDC: float = 50.0
 
     # ── HEDGE MODE (Legacy/General) ───────────────────
     HEDGE_MODE_ENABLED: bool = False
@@ -234,6 +235,7 @@ def load_config(env_path: Optional[str] = None) -> BotConfig:
         SMART_HEDGE_PAIR_MAX=_env_float("SMART_HEDGE_PAIR_MAX", 0.95),
         TEMPORAL_MAX_SINGLE_ODDS=_env_float("TEMPORAL_MAX_SINGLE_ODDS", 0.50),
         TEMPORAL_MAX_TOTAL_COST=_env_float("TEMPORAL_MAX_TOTAL_COST", 0.95),
+        HEDGE_MIN_DEPTH_USDC=_env_float("HEDGE_MIN_DEPTH_USDC", 50.0),
         HEDGE_MODE_ENABLED=_env_bool("HEDGE_MODE_ENABLED", False),
         HEDGE_MODE_ODDS_MAX=_env_float("HEDGE_MODE_ODDS_MAX", 0.50),
         HEDGE_PAIR_MAX_COST=_env_float("HEDGE_PAIR_MAX_COST", 0.35),

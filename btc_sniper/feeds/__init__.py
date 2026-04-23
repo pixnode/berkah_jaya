@@ -32,6 +32,8 @@ class OrderBookEvent:
     down_ask: float
     down_bid: float
     spread_pct: float
+    up_ask_depth_usdc: float
+    down_ask_depth_usdc: float
 
 
 @dataclass(frozen=True, slots=True)

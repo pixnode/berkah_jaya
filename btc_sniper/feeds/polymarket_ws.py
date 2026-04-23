@@ -35,6 +35,8 @@ class PolymarketFeed:
         self._reconnect_count: int = 0
         self._queue: Optional[asyncio.Queue] = None
         self._current_slug: Optional[str] = None
+        self._up_depth_usdc: float = 0.0
+        self._down_depth_usdc: float = 0.0
 
     @property
     def is_connected(self) -> bool:
@@ -276,19 +278,32 @@ class PolymarketFeed:
 
             raw_ask = 0.0
             raw_bid = 0.0
+            current_depth = 0.0
+            
             if asks:
                 raw_ask = float(asks[0].get("price", asks[0].get("px", 0)))
+                # Calculate depth USDC (Σ price * size) for prices <= 0.50
+                for a in asks:
+                    p = float(a.get("price", a.get("px", 0)))
+                    s = float(a.get("size", a.get("sz", 0)))
+                    if 0.01 <= p <= 0.50:
+                        current_depth += (p * s)
+            
             if bids:
                 raw_bid = float(bids[0].get("price", bids[0].get("px", 0)))
                 
             is_down_token = hasattr(self, "_down_token_id") and market == self._down_token_id
 
             if is_down_token:
+                self._down_depth_usdc = current_depth
                 down_ask = raw_ask
                 down_bid = raw_bid
+                # For the other side, we use the 1.0-p heuristic for prices if no update yet, 
+                # but we keep the last known depth for the other side.
                 up_bid = round(1.0 - down_ask, 4) if down_ask > 0 else 0.0
                 up_ask = round(1.0 - down_bid, 4) if down_bid > 0 else 0.0
             else:
+                self._up_depth_usdc = current_depth
                 up_ask = raw_ask
                 up_bid = raw_bid
                 down_bid = round(1.0 - up_ask, 4) if up_ask > 0 else 0.0
@@ -305,45 +320,21 @@ class PolymarketFeed:
                 down_ask=down_ask,
                 down_bid=down_bid,
                 spread_pct=round(spread_pct, 4),
+                up_ask_depth_usdc=self._up_depth_usdc,
+                down_ask_depth_usdc=self._down_depth_usdc
             )
             await self._emit(book_event)
 
+            # Signal Odds is now strictly from BEST ASK
             odds_event = OddsEvent(timestamp=now, up_odds=up_ask, down_odds=down_ask)
             await self._emit(odds_event)
 
         except (KeyError, ValueError, TypeError, IndexError) as exc:
             logger.debug("Polymarket: failed to parse book update: %s", exc)
 
-    async def _handle_price_change(self, data: dict) -> None:
-        """Parse price change event and emit OddsEvent."""
-        try:
-            market = data.get("market", data.get("asset_id", ""))
-            price = 0.0
-            side = ""
-            
-            if "changes" in data and isinstance(data["changes"], list) and len(data["changes"]) > 0:
-                change = data["changes"][0]
-                price = float(change.get("price", 0))
-                side = change.get("side", "").lower()
-            else:
-                price = float(data.get("price", 0))
-                side = data.get("side", "").lower()
-
-            if price <= 0:
-                return
-
-            now = time.time()
-            
-            is_down_token = hasattr(self, "_down_token_id") and market == self._down_token_id
-            
-            if side in ("yes", "up") or (not side and not is_down_token):
-                # This is the UP token (or side is explicitly UP)
-                odds_event = OddsEvent(timestamp=now, up_odds=price, down_odds=round(1.0 - price, 4))
-            else:
-                # This is the DOWN token
-                odds_event = OddsEvent(timestamp=now, up_odds=round(1.0 - price, 4), down_odds=price)
-            
-            await self._emit(odds_event)
+            # REFACTOR: JANGAN gunakan last_trade_price untuk pricing sama sekali.
+            # Kita hanya mengandalkan _handle_book_update untuk emisi OddsEvent.
+            pass
 
         except (KeyError, ValueError, TypeError, IndexError) as exc:
             logger.debug("Polymarket: failed to parse price change: %s", exc)

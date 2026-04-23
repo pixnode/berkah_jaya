@@ -122,9 +122,10 @@ class OrderExecutor:
         slippage_threshold = self._get_slippage_threshold(vol_regime)
 
         if slippage_delta > slippage_threshold:
-            logger.warning("SLIPPAGE_EXCEEDED: %.2f%% > %.2f%%", slippage_delta, slippage_threshold)
+            logger.warning("SLIPPAGE_EXCEEDED: reference=$%.3f (book_ask) live=$%.3f (api) delta=%.2f%% — order book depth habis sejak signal", 
+                           signal_odds, live_odds, slippage_delta)
             await self._log_event("SLIPPAGE_EXCEEDED", window_id, f"delta={slippage_delta:.2f}% > threshold={slippage_threshold:.2f}%")
-            return OrderResult("SLIPPAGE_EXCEEDED", window_id, side, live_odds, None, None, slippage_delta, slippage_threshold, None, None, None, "Slippage exceeded", False)
+            return OrderResult("SLIPPAGE_EXCEEDED", window_id, side, live_odds, None, None, slippage_delta, slippage_threshold, None, None, None, f"Slippage {slippage_delta:.2f}% exceeded {slippage_threshold:.2f}%", False)
 
         cost_estimate = self._cfg.BASE_SHARES * live_odds
         if cost_estimate > self._cfg.MAX_POSITION_USD:

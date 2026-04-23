@@ -437,9 +437,14 @@ class BotEngine:
             return
         
         # Beli UP
+        latest_book = self._signal_processor.latest_book
+        if not latest_book:
+            return
+
         if not self._order_sent_up:
-            logger.info("🛡️ SMART HEDGE UP: odds %.3f (pair cost %.3f <= %.3f)", up_odds, pair_cost, self._cfg.SMART_HEDGE_PAIR_MAX)
-            ss = self._signal_processor.state
+            if latest_book.up_ask_depth_usdc >= self._cfg.HEDGE_MIN_DEPTH_USDC:
+                logger.info("🛡️ SMART HEDGE UP: odds %.3f (depth $%.2f)", up_odds, latest_book.up_ask_depth_usdc)
+                ss = self._signal_processor.state
             gate_res = GateResult(
                 all_pass=True, 
                 failed_gate=None, 
@@ -463,8 +468,9 @@ class BotEngine:
         
         # Beli DOWN
         if not self._order_sent_down:
-            logger.info("🛡️ SMART HEDGE DOWN: odds %.3f (pair cost %.3f <= %.3f)", down_odds, pair_cost, self._cfg.SMART_HEDGE_PAIR_MAX)
-            ss = self._signal_processor.state
+            if latest_book.down_ask_depth_usdc >= self._cfg.HEDGE_MIN_DEPTH_USDC:
+                logger.info("🛡️ SMART HEDGE DOWN: odds %.3f (depth $%.2f)", down_odds, latest_book.down_ask_depth_usdc)
+                ss = self._signal_processor.state
             gate_res = GateResult(
                 all_pass=True, 
                 failed_gate=None, 
@@ -501,6 +507,9 @@ class BotEngine:
 
         up_odds = latest_odds.up_odds
         down_odds = latest_odds.down_odds
+        latest_book = self._signal_processor.latest_book
+        if not latest_book:
+            return
         
         # Track cumulative cost of hedge positions in this window
         if not hasattr(self, "_temporal_hedge_cost"):
@@ -513,9 +522,11 @@ class BotEngine:
 
         # Try UP
         if not self._order_sent_up and up_odds <= self._cfg.TEMPORAL_MAX_SINGLE_ODDS:
-            if self._temporal_hedge_cost + up_odds <= self._cfg.TEMPORAL_MAX_TOTAL_COST:
-                logger.info("⏳ TEMPORAL UP: odds %.3f. Total cost will be %.3f <= %.3f", 
-                            up_odds, self._temporal_hedge_cost + up_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
+            if latest_book.up_ask_depth_usdc < self._cfg.HEDGE_MIN_DEPTH_USDC:
+                logger.debug("⏳ TEMPORAL UP SKIP: Depth $%.2f < $%.2f", latest_book.up_ask_depth_usdc, self._cfg.HEDGE_MIN_DEPTH_USDC)
+            elif self._temporal_hedge_cost + up_odds <= self._cfg.TEMPORAL_MAX_TOTAL_COST:
+                logger.info("⏳ TEMPORAL UP: odds %.3f (depth $%.2f). Total cost will be %.3f <= %.3f", 
+                            up_odds, latest_book.up_ask_depth_usdc, self._temporal_hedge_cost + up_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
                 ss = self._signal_processor.state
                 gate_res = GateResult(
                     all_pass=True, failed_gate=None, fail_reason=None, gate_statuses={i: True for i in range(1, 8)},
@@ -536,9 +547,11 @@ class BotEngine:
 
         # Try DOWN
         if not self._order_sent_down and down_odds <= self._cfg.TEMPORAL_MAX_SINGLE_ODDS:
-            if self._temporal_hedge_cost + down_odds <= self._cfg.TEMPORAL_MAX_TOTAL_COST:
-                logger.info("⏳ TEMPORAL DOWN: odds %.3f. Total cost will be %.3f <= %.3f", 
-                            down_odds, self._temporal_hedge_cost + down_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
+            if latest_book.down_ask_depth_usdc < self._cfg.HEDGE_MIN_DEPTH_USDC:
+                logger.debug("⏳ TEMPORAL DOWN SKIP: Depth $%.2f < $%.2f", latest_book.down_ask_depth_usdc, self._cfg.HEDGE_MIN_DEPTH_USDC)
+            elif self._temporal_hedge_cost + down_odds <= self._cfg.TEMPORAL_MAX_TOTAL_COST:
+                logger.info("⏳ TEMPORAL DOWN: odds %.3f (depth $%.2f). Total cost will be %.3f <= %.3f", 
+                            down_odds, latest_book.down_ask_depth_usdc, self._temporal_hedge_cost + down_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
                 ss = self._signal_processor.state
                 gate_res = GateResult(
                     all_pass=True, failed_gate=None, fail_reason=None, gate_statuses={i: True for i in range(1, 8)},
