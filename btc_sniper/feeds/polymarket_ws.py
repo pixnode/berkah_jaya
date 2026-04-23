@@ -297,29 +297,25 @@ class PolymarketFeed:
             up_id = str(getattr(self, "_up_token_id", "")).strip()
             down_id = str(getattr(self, "_down_token_id", "")).strip()
 
-            if asset_id == down_id:
+            if asset_id == down_id and down_id != "":
                 self._down_depth_usdc = current_depth
                 down_ask = raw_ask
                 down_bid = raw_bid
-                # Update UP heuristic based on DOWN data
                 up_bid = round(1.0 - down_ask, 4) if down_ask > 0 else 0.0
                 up_ask = round(1.0 - down_bid, 4) if down_bid > 0 else 0.0
-                logger.debug("Polymarket: Updated DOWN token data (ID: %s)", asset_id)
-            elif asset_id == up_id:
+            elif asset_id == up_id and up_id != "":
                 self._up_depth_usdc = current_depth
                 up_ask = raw_ask
                 up_bid = raw_bid
-                # Update DOWN heuristic based on UP data
                 down_bid = round(1.0 - up_ask, 4) if up_ask > 0 else 0.0
                 down_ask = round(1.0 - up_bid, 4) if up_bid > 0 else 0.0
-                logger.debug("Polymarket: Updated UP token data (ID: %s)", asset_id)
             else:
-                # Log unknown tokens at INFO level occasionally to diagnose mismatch
+                # Diagnostics: log why it failed
                 now = time.time()
                 if not hasattr(self, "_last_unknown_log"): self._last_unknown_log = 0
-                if now - self._last_unknown_log > 30:
+                if now - self._last_unknown_log > 10:
                     self._last_unknown_log = now
-                    logger.info("Polymarket: Ignoring unknown asset_id: %s (Expected UP: %s, DOWN: %s)", asset_id, up_id, down_id)
+                    logger.debug("Polymarket: Asset ID mismatch. Received: %s | Expected UP: %s, DOWN: %s", asset_id, up_id, down_id)
                 return
 
             mid = (up_ask + up_bid) / 2.0 if (up_ask > 0 and up_bid > 0) else 1.0
