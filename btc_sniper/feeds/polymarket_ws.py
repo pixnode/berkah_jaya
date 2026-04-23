@@ -292,22 +292,30 @@ class PolymarketFeed:
             if bids:
                 raw_bid = float(bids[0].get("price", bids[0].get("px", 0)))
                 
-            is_down_token = hasattr(self, "_down_token_id") and market == self._down_token_id
+            # Robust ID identification
+            asset_id = str(data.get("market", data.get("asset_id", ""))).strip()
+            up_id = str(getattr(self, "_up_token_id", "")).strip()
+            down_id = str(getattr(self, "_down_token_id", "")).strip()
 
-            if is_down_token:
+            if asset_id == down_id:
                 self._down_depth_usdc = current_depth
                 down_ask = raw_ask
                 down_bid = raw_bid
-                # For the other side, we use the 1.0-p heuristic for prices if no update yet, 
-                # but we keep the last known depth for the other side.
+                # Update UP heuristic based on DOWN data
                 up_bid = round(1.0 - down_ask, 4) if down_ask > 0 else 0.0
                 up_ask = round(1.0 - down_bid, 4) if down_bid > 0 else 0.0
-            else:
+                logger.debug("Polymarket: Updated DOWN token data (ID: %s)", asset_id)
+            elif asset_id == up_id:
                 self._up_depth_usdc = current_depth
                 up_ask = raw_ask
                 up_bid = raw_bid
+                # Update DOWN heuristic based on UP data
                 down_bid = round(1.0 - up_ask, 4) if up_ask > 0 else 0.0
                 down_ask = round(1.0 - up_bid, 4) if up_bid > 0 else 0.0
+                logger.debug("Polymarket: Updated UP token data (ID: %s)", asset_id)
+            else:
+                # Ignore messages for tokens not belonging to the current window
+                return
 
             mid = (up_ask + up_bid) / 2.0 if (up_ask > 0 and up_bid > 0) else 1.0
             spread_pct = ((up_ask - up_bid) / mid * 100.0) if mid > 0 else 0.0
