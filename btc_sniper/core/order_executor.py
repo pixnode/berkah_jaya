@@ -56,11 +56,7 @@ class OrderExecutor:
             self._init_clob_client()
 
     def _init_clob_client(self) -> None:
-        """Initialize the specific CLOB client based on API version.
-        
-        MUST use Level 2 Auth (key + creds) for create_and_post_order().
-        MUST set signature_type=1 and funder for SAFE wallet gasless trades.
-        """
+        """Initialize the specific CLOB client based on API version."""
         from py_clob_client.clob_types import ApiCreds
         
         funder = self._cfg.POLYMARKET_PROXY_WALLET if self._cfg.POLY_WALLET_TYPE == "safe" else None
@@ -107,41 +103,83 @@ class OrderExecutor:
         signal_odds = gate_result.target_ask
         vol_regime = gate_result.signal_snapshot.vol_regime
 
+        # ════════════════════════════════════════════════════════
+        # KEMUNGKINAN 3 — Paper mode guard (FIRST PRIORITY)
+        # ════════════════════════════════════════════════════════
         if self._cfg.PAPER_TRADING_MODE:
             simulated_cost = self._cfg.BASE_SHARES * signal_odds
-            logger.info("[PAPER] Simulated %s fill on Token %s: odds=%.3f, cost=$%.4f", side, token_id[:8], signal_odds, simulated_cost)
-            return OrderResult("PAPER_FILL", window_id, side, signal_odds, self._cfg.BASE_SHARES, simulated_cost, 0.0, self._get_slippage_threshold(vol_regime), None, time.time(), 0, None, True)
+            logger.info("[PAPER] Simulated %s fill on Token %s: odds=%.3f, cost=$%.4f", 
+                        side, token_id[:8], signal_odds, simulated_cost)
+            return OrderResult(
+                status="PAPER_FILL",
+                window_id=window_id,
+                side=side,
+                entry_odds=signal_odds,
+                shares_bought=self._cfg.BASE_SHARES,
+                cost_usd=simulated_cost,
+                slippage_delta=0.0,
+                slippage_threshold_used=0.0,
+                tx_hash=None,
+                confirmed_at=time.time(),
+                latency_ms=0,
+                error_msg=None,
+                is_paper=True,
+            )
 
+        # ── LIVE MODE LOGIC ───────────────────────────────────────
         try:
             live_odds = await self._fetch_live_odds(token_id)
         except Exception as exc:
             logger.error("Failed to fetch live odds for token %s: %s", token_id[:8], exc)
-            return OrderResult("ERROR", window_id, side, signal_odds, None, None, 0.0, self._get_slippage_threshold(vol_regime), None, None, None, str(exc), False)
+            return OrderResult("ERROR", window_id, side, signal_odds, None, None, 0.0, 0.0, None, None, None, str(exc), False)
 
-        # MASALAH 4 FIXED: Slippage threshold specialized for low odds
+        # ── Slippage Calculation ──
         if signal_odds < 0.10:
-            # FIX 1 — Gunakan absolute delta untuk odds rendah
+            # Absolute delta for low odds
             slippage_delta = abs(live_odds - signal_odds)
             slippage_threshold = self._cfg.SLIPPAGE_THRESHOLD_ABS_LOW_ODDS
+            log_type = "SLIPPAGE_ABS"
             is_exceeded = slippage_delta > slippage_threshold
-            log_msg = f"SLIPPAGE_ABS: signal={signal_odds:.3f} live={live_odds:.3f} delta={slippage_delta:+.3f} > threshold={slippage_threshold:.3f} — LOW ODDS ABSOLUTE CHECK"
         else:
-            # Untuk odds normal, gunakan percentage
+            # Percentage for normal odds
             slippage_delta = abs(live_odds - signal_odds) / signal_odds * 100.0 if signal_odds > 0 else 0.0
             slippage_threshold = self._get_slippage_threshold(vol_regime)
+            log_type = "SLIPPAGE_PCT"
             is_exceeded = slippage_delta > slippage_threshold
-            log_msg = f"SLIPPAGE_PCT: signal={signal_odds:.3f} live={live_odds:.3f} delta={slippage_delta:.2f}% > threshold={slippage_threshold:.2f}% — order book depth habis"
 
-        if is_exceeded:
+        # ════════════════════════════════════════════════════════
+        # TAMBAHAN — SLIPPAGE_CHECK_ENABLED toggle
+        # ════════════════════════════════════════════════════════
+        if not self._cfg.SLIPPAGE_CHECK_ENABLED:
+            logger.debug("Slippage check disabled via config (Delta: %.4f, Threshold: %.4f)", 
+                         slippage_delta, slippage_threshold)
+        elif is_exceeded:
+            log_msg = f"{log_type}: signal={signal_odds:.3f} live={live_odds:.3f} delta={slippage_delta:.4f} > threshold={slippage_threshold:.4f}"
             logger.warning(log_msg)
             await self._log_event("SLIPPAGE_EXCEEDED", window_id, log_msg)
-            return OrderResult("SLIPPAGE_EXCEEDED", window_id, side, live_odds, None, None, slippage_delta, slippage_threshold, None, None, None, log_msg, False)
+            return OrderResult(
+                status="SLIPPAGE_EXCEEDED",
+                window_id=window_id,
+                side=side,
+                entry_odds=live_odds,
+                shares_bought=None,
+                cost_usd=None,
+                slippage_delta=slippage_delta,
+                slippage_threshold_used=slippage_threshold,
+                tx_hash=None,
+                confirmed_at=None,
+                latency_ms=None,
+                error_msg=log_msg,
+                is_paper=False,
+            )
 
+        # ── Position Sizing Guard ──
         cost_estimate = self._cfg.BASE_SHARES * live_odds
         if cost_estimate > self._cfg.MAX_POSITION_USD:
             logger.warning("POSITION_TOO_LARGE: $%.4f > max $%.2f", cost_estimate, self._cfg.MAX_POSITION_USD)
             return OrderResult("POSITION_TOO_LARGE", window_id, side, live_odds, None, cost_estimate, slippage_delta, slippage_threshold, None, None, None, "Position too large", False)
 
+        # ── Submission ──
         t_submit = time.time()
         try:
             tx_result = await self._submit_order(live_odds, token_id)
@@ -152,7 +190,21 @@ class OrderExecutor:
         t_confirmed = time.time()
         latency_ms = int((t_confirmed - t_submit) * 1000)
 
-        return OrderResult(tx_result.get("status", "FILLED"), window_id, side, live_odds, self._cfg.BASE_SHARES, cost_estimate, slippage_delta, slippage_threshold, tx_result.get("tx_hash"), t_confirmed, latency_ms, tx_result.get("error"), False)
+        return OrderResult(
+            status=tx_result.get("status", "FILLED"),
+            window_id=window_id,
+            side=side,
+            entry_odds=live_odds,
+            shares_bought=self._cfg.BASE_SHARES,
+            cost_usd=cost_estimate,
+            slippage_delta=slippage_delta,
+            slippage_threshold_used=slippage_threshold,
+            tx_hash=tx_result.get("tx_hash"),
+            confirmed_at=t_confirmed,
+            latency_ms=latency_ms,
+            error_msg=tx_result.get("error"),
+            is_paper=False
+        )
 
     def _get_slippage_threshold(self, vol_regime: str) -> float:
         if vol_regime == "HIGH": return self._cfg.SLIPPAGE_THRESHOLD_HIGH
@@ -162,22 +214,37 @@ class OrderExecutor:
         """Re-fetch current odds from Polymarket CLOB API using specific Token ID."""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5))
+        
         url = f"{self._cfg.CLOB_HOST}/book"
         params = {"token_id": token_id}
+        
         async with self._session.get(url, params=params) as resp:
             if resp.status == 200:
                 data = await resp.json()
+                
+                # ════════════════════════════════════════════════════════
+                # KEMUNGKINAN 1 & 2 — Debug logging & Raw response analysis
+                # ════════════════════════════════════════════════════════
                 asks = data.get("asks", [])
+                
+                # Handle both 'price' and 'px' keys
+                best_ask = 0.0
                 if asks:
-                    return float(asks[0].get("price", 0))
+                    first_ask = asks[0]
+                    price_str = first_ask.get("price", first_ask.get("px", "0"))
+                    best_ask = float(price_str)
+                
+                logger.debug("_fetch_live_odds: token=%s..., best_ask=%.4f, asks_count=%d", 
+                             token_id[:8], best_ask, len(asks))
+                logger.debug("Raw /book response for %s: %s", token_id[:8], str(data)[:500]) # Limit to 500 chars
+                
+                if asks:
+                    return best_ask
+                    
             raise RuntimeError(f"HTTP {resp.status} fetching odds for token {token_id[:8]}")
 
     async def _submit_order(self, odds: float, token_id: str) -> dict:
-        """Build, sign, and submit BUY order to Polymarket CLOB API.
-        
-        Uses create_and_post_order() which requires Level 2 Auth.
-        All sniper orders are BUY (buying outcome shares).
-        """
+        """Build, sign, and submit BUY order to Polymarket CLOB API."""
         try:
             if self._cfg.CLOB_API_VERSION == "v2" and self._client_v2:
                 from py_clob_client_v2.clob_types import OrderArgs
