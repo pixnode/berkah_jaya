@@ -437,7 +437,11 @@ class BotEngine:
                 in_sweet_spot=True,
                 side="DOWN"
             )
-            order_res = await self._order_executor.execute(gate_res, slug)
+            target_token_id = self._current_tokens.get("DOWN")
+            if not target_token_id:
+                logger.error("Cannot execute HEDGE DOWN: Missing token_id!")
+                return
+            order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
             if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
                 self._order_sent_down = True
                 await self._log_hedge_trade(slug, order_res, "HEDGE_DOWN")

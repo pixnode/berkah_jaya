@@ -56,8 +56,21 @@ class OrderExecutor:
             self._init_clob_client()
 
     def _init_clob_client(self) -> None:
-        """Initialize the specific CLOB client based on API version."""
+        """Initialize the specific CLOB client based on API version.
+        
+        MUST use Level 2 Auth (key + creds) for create_and_post_order().
+        MUST set signature_type=1 and funder for SAFE wallet gasless trades.
+        """
+        from py_clob_client.clob_types import ApiCreds
+        
         funder = self._cfg.POLYMARKET_PROXY_WALLET if self._cfg.POLY_WALLET_TYPE == "safe" else None
+        sig_type = 1 if self._cfg.POLY_WALLET_TYPE == "safe" else 2
+        
+        creds = ApiCreds(
+            api_key=self._cfg.POLY_API_KEY,
+            api_secret=self._cfg.POLY_API_SECRET,
+            api_passphrase=self._cfg.POLY_API_PASSPHRASE,
+        )
         
         if self._cfg.CLOB_API_VERSION == "v2":
             try:
@@ -66,10 +79,11 @@ class OrderExecutor:
                     self._cfg.CLOB_HOST,
                     key=self._cfg.POLYMARKET_PRIVATE_KEY,
                     chain_id=self._cfg.POLY_CHAIN_ID,
-                    signature_type=2 if self._cfg.POLY_WALLET_TYPE != "safe" else 1,
-                    funder=funder
+                    signature_type=sig_type,
+                    funder=funder,
+                    creds=creds,
                 )
-                logger.info("Initialized CLOB Client V2 (Safe: %s)", self._cfg.POLY_WALLET_TYPE == "safe")
+                logger.info("Initialized CLOB Client V2 (L2 Auth, Safe: %s)", self._cfg.POLY_WALLET_TYPE == "safe")
             except ImportError as e:
                 logger.error("py-clob-client-v2 not installed: %s", e)
         else:
@@ -79,10 +93,11 @@ class OrderExecutor:
                     self._cfg.CLOB_HOST,
                     key=self._cfg.POLYMARKET_PRIVATE_KEY,
                     chain_id=self._cfg.POLY_CHAIN_ID,
-                    signature_type=2 if self._cfg.POLY_WALLET_TYPE != "safe" else 1,
-                    funder=funder
+                    signature_type=sig_type,
+                    funder=funder,
+                    creds=creds,
                 )
-                logger.info("Initialized CLOB Client V1 (Safe: %s)", self._cfg.POLY_WALLET_TYPE == "safe")
+                logger.info("Initialized CLOB Client V1 (L2 Auth, Safe: %s)", self._cfg.POLY_WALLET_TYPE == "safe")
             except ImportError as e:
                 logger.error("py-clob-client not installed: %s", e)
 
@@ -147,21 +162,29 @@ class OrderExecutor:
             raise RuntimeError(f"HTTP {resp.status} fetching odds for token {token_id[:8]}")
 
     async def _submit_order(self, odds: float, token_id: str) -> dict:
-        """Build, sign, and submit order to Polymarket CLOB API."""
+        """Build, sign, and submit BUY order to Polymarket CLOB API.
+        
+        Uses create_and_post_order() which requires Level 2 Auth.
+        All sniper orders are BUY (buying outcome shares).
+        """
         try:
             if self._cfg.CLOB_API_VERSION == "v2" and self._client_v2:
                 from py_clob_client_v2.clob_types import OrderArgs
-                order_args = OrderArgs(token_id=token_id, price=odds, size=self._cfg.BASE_SHARES)
+                order_args = OrderArgs(token_id=token_id, price=odds, size=self._cfg.BASE_SHARES, side="BUY")
                 signed_order = self._client_v2.create_and_post_order(order_args)
+                logger.info("Order posted via CLOB V2: %s", signed_order)
                 return {"status": "FILLED", "tx_hash": signed_order.get("orderID", ""), "error": None}
             elif self._client_v1:
                 from py_clob_client.clob_types import OrderArgs
-                order_args = OrderArgs(token_id=token_id, price=odds, size=self._cfg.BASE_SHARES)
+                order_args = OrderArgs(token_id=token_id, price=odds, size=self._cfg.BASE_SHARES, side="BUY")
                 signed_order = self._client_v1.create_and_post_order(order_args)
+                logger.info("Order posted via CLOB V1: %s", signed_order)
                 return {"status": "FILLED", "tx_hash": signed_order.get("orderID", ""), "error": None}
             else:
+                logger.error("CLOB client not initialized — cannot submit order")
                 return {"status": "REJECTED", "tx_hash": None, "error": "CLOB client not initialized"}
         except Exception as exc:
+            logger.error("Order submission failed: %s", exc)
             return {"status": "REJECTED", "tx_hash": None, "error": str(exc)}
 
     async def stop(self) -> None:

@@ -61,13 +61,20 @@ class ClaimManager:
         self._chainlink_feed = feed
 
     async def _init_clob_client(self) -> None:
-        """Initialize CLOB client dengan API credentials."""
+        """Initialize CLOB client with full Level 2 Auth credentials.
+        
+        Must include signature_type and funder for SAFE wallet to work.
+        """
         if self._cfg.PAPER_TRADING_MODE:
             logger.info("Paper mode: CLOB client tidak diinisialisasi")
             return
         if ClobClient is None:
             logger.error("py_clob_client is not installed!")
             return
+        
+        funder = self._cfg.POLYMARKET_PROXY_WALLET if self._cfg.POLY_WALLET_TYPE == "safe" else None
+        sig_type = 1 if self._cfg.POLY_WALLET_TYPE == "safe" else 2
+        
         self._clob_client = ClobClient(
             host=self._cfg.CLOB_HOST,
             key=self._cfg.POLYMARKET_PRIVATE_KEY,
@@ -77,8 +84,10 @@ class ClaimManager:
                 api_secret=self._cfg.POLY_API_SECRET,
                 api_passphrase=self._cfg.POLY_API_PASSPHRASE,
             ),
+            signature_type=sig_type,
+            funder=funder,
         )
-        logger.info("CLOB client initialized successfully")
+        logger.info("CLOB client initialized (L2 Auth, sig_type=%d, funder=%s)", sig_type, bool(funder))
 
     @property
     def eoa_warning(self) -> bool:
@@ -274,7 +283,7 @@ class ClaimManager:
                     self._wallet_balance = raw / 1e6  # Raw micro-USDC
                 else:
                     self._wallet_balance = raw  # Already in USDC
-                logger.debug("CLOB balance: $%.2f", self._wallet_balance)
+                logger.info("CLOB balance: $%.2f", self._wallet_balance)
             elif isinstance(result, dict):
                 logger.warning("Unexpected balance response: %s", result)
         except Exception as exc:
