@@ -442,55 +442,53 @@ class BotEngine:
             return
 
         if not self._order_sent_up:
-            if latest_book.up_ask_depth_usdc >= self._cfg.HEDGE_MIN_DEPTH_USDC:
+            # KONDISI 1: Harga valid (Best Ask)
+            # KONDISI 2: Depth cukup
+            if up_odds <= self._cfg.ODDS_MAX and latest_book.up_ask_depth_usdc >= self._cfg.HEDGE_MIN_DEPTH_USDC:
                 logger.info("🛡️ SMART HEDGE UP: odds %.3f (depth $%.2f)", up_odds, latest_book.up_ask_depth_usdc)
                 ss = self._signal_processor.state
-            gate_res = GateResult(
-                all_pass=True, 
-                failed_gate=None, 
-                fail_reason=None, 
-                gate_statuses={i: True for i in range(1, 8)},
-                evaluated_at=time.time(),
-                signal_snapshot=ss,
-                target_ask=up_odds,
-                expected_odds=up_odds,
-                in_sweet_spot=True,
-                side="UP"
-            )
-            target_token_id = self._current_tokens.get("UP")
-            if not target_token_id:
-                logger.error("Cannot execute SMART HEDGE UP: Missing token_id!")
-                return
-            order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
-            if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
-                self._order_sent_up = True
-                await self._log_hedge_trade(slug, order_res, "HEDGE_UP")
+                gate_res = GateResult(
+                    all_pass=True, failed_gate=None, fail_reason=None, gate_statuses={i: True for i in range(1, 8)},
+                    evaluated_at=time.time(), signal_snapshot=ss, target_ask=up_odds, expected_odds=up_odds,
+                    in_sweet_spot=True, side="UP"
+                )
+                target_token_id = self._current_tokens.get("UP")
+                if target_token_id:
+                    order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
+                    if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
+                        self._order_sent_up = True
+                        await self._log_hedge_trade(slug, order_res, "HEDGE_UP")
+                else:
+                    logger.error("Cannot execute SMART HEDGE UP: Missing token_id!")
+            elif up_odds > self._cfg.ODDS_MAX:
+                logger.debug("🛡️ SMART HEDGE UP SKIP: Odds %.3f > %.3f", up_odds, self._cfg.ODDS_MAX)
+            else:
+                logger.debug("🛡️ SMART HEDGE UP SKIP: Depth $%.2f < $%.2f", latest_book.up_ask_depth_usdc, self._cfg.HEDGE_MIN_DEPTH_USDC)
         
         # Beli DOWN
         if not self._order_sent_down:
-            if latest_book.down_ask_depth_usdc >= self._cfg.HEDGE_MIN_DEPTH_USDC:
+            # KONDISI 1: Harga valid (Best Ask)
+            # KONDISI 2: Depth cukup
+            if down_odds <= self._cfg.ODDS_MAX and latest_book.down_ask_depth_usdc >= self._cfg.HEDGE_MIN_DEPTH_USDC:
                 logger.info("🛡️ SMART HEDGE DOWN: odds %.3f (depth $%.2f)", down_odds, latest_book.down_ask_depth_usdc)
                 ss = self._signal_processor.state
-            gate_res = GateResult(
-                all_pass=True, 
-                failed_gate=None, 
-                fail_reason=None, 
-                gate_statuses={i: True for i in range(1, 8)},
-                evaluated_at=time.time(),
-                signal_snapshot=ss,
-                target_ask=down_odds,
-                expected_odds=down_odds,
-                in_sweet_spot=True,
-                side="DOWN"
-            )
-            target_token_id = self._current_tokens.get("DOWN")
-            if not target_token_id:
-                logger.error("Cannot execute HEDGE DOWN: Missing token_id!")
-                return
-            order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
-            if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
-                self._order_sent_down = True
-                await self._log_hedge_trade(slug, order_res, "HEDGE_DOWN")
+                gate_res = GateResult(
+                    all_pass=True, failed_gate=None, fail_reason=None, gate_statuses={i: True for i in range(1, 8)},
+                    evaluated_at=time.time(), signal_snapshot=ss, target_ask=down_odds, expected_odds=down_odds,
+                    in_sweet_spot=True, side="DOWN"
+                )
+                target_token_id = self._current_tokens.get("DOWN")
+                if target_token_id:
+                    order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
+                    if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
+                        self._order_sent_down = True
+                        await self._log_hedge_trade(slug, order_res, "HEDGE_DOWN")
+                else:
+                    logger.error("Cannot execute HEDGE DOWN: Missing token_id!")
+            elif down_odds > self._cfg.ODDS_MAX:
+                logger.debug("🛡️ SMART HEDGE DOWN SKIP: Odds %.3f > %.3f", down_odds, self._cfg.ODDS_MAX)
+            else:
+                logger.debug("🛡️ SMART HEDGE DOWN SKIP: Depth $%.2f < $%.2f", latest_book.down_ask_depth_usdc, self._cfg.HEDGE_MIN_DEPTH_USDC)
 
     async def _handle_temporal_hedge(self, slug: str) -> None:
         """Execute Temporal Hedge Strategy: Buy cheapest side, track cost, buy other side later if total < max cost."""
