@@ -195,20 +195,10 @@ class SafetyMonitor:
                         f"Chainlink age {cl_event.age_seconds}s > {self._cfg.CHAINLINK_MAX_AGE_SEC}s at INIT",
                     )
 
-        # ── TRIGGER 6: ODDS_OUT_OF_RANGE (backup) ─────
-        if self._signal_processor and hasattr(self._signal_processor, "latest_odds"):
-            odds = self._signal_processor.latest_odds
-            if odds is not None:
-                gap_dir = ""
-                if hasattr(self._signal_processor, "state"):
-                    gap_dir = self._signal_processor.state.gap_direction
-
-                target_ask = odds.up_odds if gap_dir == "UP" else odds.down_odds
-                if target_ask > 0 and (target_ask < self._cfg.ODDS_MIN or target_ask > self._cfg.ODDS_MAX):
-                    await self._emit_event(
-                        "ODDS_OUT_OF_RANGE", "SKIP", window_id,
-                        f"ask={target_ask:.3f} outside [{self._cfg.ODDS_MIN},{self._cfg.ODDS_MAX}]",
-                    )
+        # ── TRIGGER 6: ODDS_OUT_OF_RANGE ──────────────
+        # NOTE: Gate 4 already enforces odds boundaries during execution.
+        # This trigger is informational only — do NOT spam logs.
+        # Removed: was printing WARNING 2x/sec, flooding logs.
 
     async def _emit_event(
         self,

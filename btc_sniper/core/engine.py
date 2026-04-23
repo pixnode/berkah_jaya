@@ -400,8 +400,8 @@ class BotEngine:
             return
         
         # Beli UP jika murah
-        if up_odds <= self._cfg.ODDS_MAX and not self._order_sent_up:
-            logger.info("🛡️ HEDGE UP: odds %.3f <= %.3f", up_odds, self._cfg.ODDS_MAX)
+        if up_odds <= self._cfg.HEDGE_MODE_ODDS_MAX and not self._order_sent_up:
+            logger.info("🛡️ HEDGE UP: odds %.3f <= %.3f", up_odds, self._cfg.HEDGE_MODE_ODDS_MAX)
             ss = self._signal_processor.state
             gate_res = GateResult(
                 all_pass=True, 
@@ -422,8 +422,8 @@ class BotEngine:
                 await self._log_hedge_trade(slug, order_res, "HEDGE_UP")
         
         # Beli DOWN jika murah
-        if down_odds <= self._cfg.ODDS_MAX and not self._order_sent_down:
-            logger.info("🛡️ HEDGE DOWN: odds %.3f <= %.3f", down_odds, self._cfg.ODDS_MAX)
+        if down_odds <= self._cfg.HEDGE_MODE_ODDS_MAX and not self._order_sent_down:
+            logger.info("🛡️ HEDGE DOWN: odds %.3f <= %.3f", down_odds, self._cfg.HEDGE_MODE_ODDS_MAX)
             ss = self._signal_processor.state
             gate_res = GateResult(
                 all_pass=True, 
@@ -552,13 +552,19 @@ class BotEngine:
         ds.cvd_aligned = ss.cvd_aligned
         ds.cvd_direction = ss.cvd_direction
         
-        # Panel D: Order Book (Odds)
+        # Panel D: Order Book (Odds + Real Depth)
         latest_odds = self._signal_processor.latest_odds
+        latest_book = self._signal_processor.latest_book
         if latest_odds:
             ds.up_ask = latest_odds.up_odds
-            ds.up_bid = latest_odds.up_odds - 0.01
             ds.down_ask = latest_odds.down_odds
-            ds.down_bid = latest_odds.down_odds - 0.01
+            # Use real order book data for bids (not synthetic offset)
+            if latest_book:
+                ds.up_bid = latest_book.up_bid
+                ds.down_bid = latest_book.down_bid
+            else:
+                ds.up_bid = 0.0
+                ds.down_bid = 0.0
             ds.spread_pct = abs(latest_odds.up_odds + latest_odds.down_odds - 1.0) * 100.0
             
         # Panel E: Safety Gates
@@ -576,8 +582,8 @@ class BotEngine:
         # Hedge Mode Status
         ds.hedge_mode_enabled = self._cfg.HEDGE_MODE_ENABLED
         if latest_odds:
-            ds.up_armed = latest_odds.up_odds <= self._cfg.ODDS_MAX
-            ds.down_armed = latest_odds.down_odds <= self._cfg.ODDS_MAX
+            ds.up_armed = latest_odds.up_odds <= self._cfg.HEDGE_MODE_ODDS_MAX
+            ds.down_armed = latest_odds.down_odds <= self._cfg.HEDGE_MODE_ODDS_MAX
         else:
             ds.up_armed = False
             ds.down_armed = False
