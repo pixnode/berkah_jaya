@@ -83,6 +83,12 @@ class PolymarketFeed:
                 logger.warning("Failed to unsubscribe: %s", exc)
         self._current_slug = None
 
+    def set_active_tokens(self, up_id: str, down_id: str) -> None:
+        """Inject active Token IDs from the engine to avoid redundant API calls."""
+        self._up_token_id = str(up_id).strip()
+        self._down_token_id = str(down_id).strip()
+        logger.info("PolymarketFeed: Active tokens injected (UP: %s, DOWN: %s)", up_id, down_id)
+
     async def start(self, queue: asyncio.Queue) -> None:
         """Start the feed — connect and begin streaming to queue."""
         self._queue = queue
@@ -167,45 +173,32 @@ class PolymarketFeed:
                     pass
 
     async def _send_subscribe(self, market_slug: str) -> None:
-        """Send subscription message for a market."""
+        """Send subscription message for a market using injected or known IDs."""
         if self._ws is None:
             return
-        try:
-            import aiohttp
-            import json
             
-            # Fetch clobTokenIds from Gamma API
-            gamma_url = f"https://gamma-api.polymarket.com/events?slug={market_slug}"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(gamma_url, timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if data and len(data) > 0 and "markets" in data[0] and len(data[0]["markets"]) > 0:
-                            market_data = data[0]["markets"][0]
-                            clob_token_ids_str = market_data.get("clobTokenIds", "[]")
-                            clob_token_ids = json.loads(clob_token_ids_str)
-                            
-                            if clob_token_ids:
-                                self._up_token_id = clob_token_ids[0]
-                                if len(clob_token_ids) > 1:
-                                    self._down_token_id = clob_token_ids[1]
-                                    
-                                await self._ws.send(json.dumps({
-                                    "assets_ids": clob_token_ids,
-                                    "type": "market",
-                                }))
-                                logger.info("Subscribed to Polymarket assets: %s for %s", clob_token_ids, market_slug)
-                                return
-                            
-            # Fallback if gamma api fails or no clobTokenIds found
-            logger.warning("Failed to get clobTokenIds for %s, trying slug fallback", market_slug)
-            await self._ws.send(json.dumps({
-                "assets_ids": [market_slug],
-                "type": "market",
-            }))
+        try:
+            # Use injected IDs if available, otherwise fallback to slug
+            up_id = getattr(self, "_up_token_id", "")
+            down_id = getattr(self, "_down_token_id", "")
+            
+            ids_to_sub = []
+            if up_id: ids_to_sub.append(up_id)
+            if down_id: ids_to_sub.append(down_id)
+            
+            if not ids_to_sub:
+                # If no IDs yet, we subscribe to the market slug as fallback 
+                # (Polymarket WS supports slug subscription for some channels)
+                logger.warning("No token IDs available for %s yet, subscribing to slug", market_slug)
+                payload = {"assets_ids": [market_slug], "type": "market"}
+            else:
+                logger.info("Subscribing to WebSocket for tokens: %s", ids_to_sub)
+                payload = {"assets_ids": ids_to_sub, "type": "market"}
+
+            await self._ws.send(json.dumps(payload))
+            
         except Exception as exc:
-            logger.error("Failed to subscribe to %s: %s", market_slug, exc)
-            self._current_slug = None
+            logger.error("Failed to send WS subscribe for %s: %s", market_slug, exc)
 
     async def _heartbeat_loop(self, ws: websockets.WebSocketClientProtocol) -> None:
         """Send periodic pings and check for pong responses."""

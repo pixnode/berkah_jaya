@@ -270,8 +270,17 @@ class BotEngine:
                                     logger.warning("Failed to parse clobTokenIds fallback: %s", e)
                             
                             if self._current_tokens.get("UP") and self._current_tokens.get("DOWN"):
-                                logger.info("Fetched tokens for %s: UP=%s, DOWN=%s", slug, self._current_tokens.get("UP")[:8], self._current_tokens.get("DOWN")[:8])
-                                return # Success, exit retry loop
+                                # Inject tokens into Polymarket WS feed immediately
+                                if hasattr(self._poly_feed, "set_active_tokens"):
+                                    self._poly_feed.set_active_tokens(self._current_tokens["UP"], self._current_tokens["DOWN"])
+                                
+                                # If WS is already connected, re-subscribe with the new tokens
+                                if hasattr(self._poly_feed, "is_connected") and self._poly_feed.is_connected:
+                                    asyncio.create_task(self._poly_feed.subscribe(slug))
+
+                                logger.info("Fetched tokens for %s: UP=%s, DOWN=%s", 
+                                            slug, self._current_tokens["UP"][:10], self._current_tokens["DOWN"][:10])
+                                return
                     
                 # If we get here, either status != 200 or data was empty/missing tokens
                 if attempt < max_retries - 1:
