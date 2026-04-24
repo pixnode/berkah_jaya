@@ -66,17 +66,17 @@ class SignalProcessor:
         self._event_logger = event_logger
 
         # ── CVD rolling window ────────────────────────
-        self._cvd_deque: Deque[tuple[float, float]] = collections.deque()
+        self._cvd_deque: Deque[tuple[float, float]] = collections.deque(maxlen=15000)
         self._cvd_running: float = 0.0
 
         # ── Volume tracking (split buy/sell) ──────────
-        self._buy_deque: Deque[tuple[float, float]] = collections.deque()
-        self._sell_deque: Deque[tuple[float, float]] = collections.deque()
+        self._buy_deque: Deque[tuple[float, float]] = collections.deque(maxlen=15000)
+        self._sell_deque: Deque[tuple[float, float]] = collections.deque(maxlen=15000)
         self._buy_running: float = 0.0
         self._sell_running: float = 0.0
 
         # ── Velocity tracking ─────────────────────────
-        self._velocity_deque: Deque[tuple[float, float]] = collections.deque()
+        self._velocity_deque: Deque[tuple[float, float]] = collections.deque(maxlen=15000)
 
         # ── ATR candle tracking ───────────────────────
         self._candle_deque: Deque[Candle] = collections.deque(maxlen=cfg.ATR_LOOKBACK_CANDLES)

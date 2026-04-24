@@ -8,6 +8,7 @@ Short-circuit: stops at first FAIL.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Literal, Optional
@@ -98,9 +99,9 @@ class GateEvaluator:
             target_ask = odds.up_odds if side == "UP" else odds.down_odds
 
         # Expected odds for mispricing check (Gate 3)
-        atr_safe = max(signal.atr, 1.0)
-        expected_odds_raw = 0.50 + (abs(signal.gap) / atr_safe * self._cfg.MISPRICING_MULTIPLIER)
-        expected_odds = max(0.50, min(expected_odds_raw, 0.95))
+        k = self._cfg.MISPRICING_MULTIPLIER / max(signal.atr, 1.0)
+        expected_odds_raw = 1.0 / (1.0 + math.exp(-k * signal.gap))
+        expected_odds = min(0.99, max(0.01, expected_odds_raw))
 
         # Sweet spot check
         in_sweet_spot = (

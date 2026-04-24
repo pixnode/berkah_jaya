@@ -65,6 +65,7 @@ class BotEngine:
         self._order_executor = OrderExecutor(cfg, self._audit_logger)
         self._claim_manager = ClaimManager(cfg, self._audit_logger)
         self._circuit_breaker = CircuitBreaker(cfg, self._audit_logger)
+        self._order_executor.set_circuit_breaker(self._circuit_breaker)
         self._safety_monitor = SafetyMonitor(cfg, self._audit_logger)
         self._dashboard = Dashboard(cfg)
 
@@ -235,7 +236,7 @@ class BotEngine:
                     self._fetch_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5))
                 
                 # Use specific User-Agent to bypass basic Cloudflare checks
-                headers = {"User-Agent": "Mozilla/5.0 (Polymarket-BTCSniper/2.3)"}
+                headers = {"User-Agent": "Mozilla/5.0 (Polymarket-BTCSniper/2.4)"}
                 url = f"{self._cfg.GAMMA_API_URL}/markets?slug={slug}"
                 
                 async with self._fetch_session.get(url, headers=headers) as resp:
@@ -243,31 +244,23 @@ class BotEngine:
                         data = await resp.json()
                         if data and isinstance(data, list) and len(data) > 0:
                             market_data = data[0]
-                            tokens = market_data.get("tokens", [])
-                            if tokens:
-                                for t in tokens:
-                                    outcome = t.get("outcome", "").upper()
-                                    token_id = t.get("token_id")
-                                    if outcome in ("YES", "UP"):
-                                        self._current_tokens["UP"] = token_id
-                                    elif outcome in ("NO", "DOWN"):
-                                        self._current_tokens["DOWN"] = token_id
-                            else:
-                                # Fallback to clobTokenIds if tokens array is lagging
-                                clob_token_ids_str = market_data.get("clobTokenIds", "[]")
-                                outcomes_str = market_data.get("outcomes", "[]")
-                                try:
-                                    clob_token_ids = json.loads(clob_token_ids_str)
-                                    outcomes = json.loads(outcomes_str)
-                                    if len(clob_token_ids) == len(outcomes):
-                                        for idx, outcome in enumerate(outcomes):
-                                            outcome_upper = outcome.upper()
-                                            if outcome_upper in ("YES", "UP"):
-                                                self._current_tokens["UP"] = clob_token_ids[idx]
-                                            elif outcome_upper in ("NO", "DOWN"):
-                                                self._current_tokens["DOWN"] = clob_token_ids[idx]
-                                except Exception as e:
-                                    logger.warning("Failed to parse clobTokenIds fallback: %s", e)
+
+                            # KUNCI PERBAIKAN: WAJIB gunakan clobTokenIds (Decimal format)
+                            # Jangan gunakan tokens array karena bisa berformat Hex (0x...)
+                            clob_token_ids_str = market_data.get("clobTokenIds", "[]")
+                            outcomes_str = market_data.get("outcomes", "[]")
+                            try:
+                                clob_token_ids = json.loads(clob_token_ids_str)
+                                outcomes = json.loads(outcomes_str)
+                                if len(clob_token_ids) == len(outcomes):
+                                    for idx, outcome in enumerate(outcomes):
+                                        outcome_upper = outcome.upper()
+                                        if outcome_upper in ("YES", "UP"):
+                                            self._current_tokens["UP"] = str(clob_token_ids[idx])
+                                        elif outcome_upper in ("NO", "DOWN"):
+                                            self._current_tokens["DOWN"] = str(clob_token_ids[idx])
+                            except Exception as e:
+                                logger.warning("Failed to parse clobTokenIds: %s", e)
                             
                             if self._current_tokens.get("UP") and self._current_tokens.get("DOWN"):
                                 # Inject tokens into Polymarket WS feed immediately
@@ -278,16 +271,13 @@ class BotEngine:
                                 if hasattr(self._poly_feed, "is_connected") and self._poly_feed.is_connected:
                                     asyncio.create_task(self._poly_feed.subscribe(slug))
 
-                                logger.info("Fetched tokens for %s: UP=%s, DOWN=%s", 
+                                logger.info("Fetched DEC Tokens for %s: UP=%s, DOWN=%s", 
                                             slug, self._current_tokens["UP"][:10], self._current_tokens["DOWN"][:10])
                                 return
                     
-                # If we get here, either status != 200 or data was empty/missing tokens
                 if attempt < max_retries - 1:
-                    logger.debug("Tokens for %s not ready yet (attempt %d). Retrying in 2s...", slug, attempt + 1)
                     await asyncio.sleep(2)
             except Exception as exc:
-                logger.error("Failed to fetch window tokens for %s (attempt %d): %s", slug, attempt + 1, exc)
                 if attempt < max_retries - 1:
                     await asyncio.sleep(2)
         
@@ -330,8 +320,8 @@ class BotEngine:
                     timestamp_order_sent=datetime.now(timezone.utc).isoformat(),
                     timestamp_confirmed=datetime.now(timezone.utc).isoformat(),
                     side=order_res.side or gate_res.side or "",
-                    strike_price=gate_res.target_ask,
-                    hl_price_at_trigger=ss.hl_price,
+                    strike_price=ss.strike_price,
+                    hl_price_at_trigger=ss.current_hl_price,
                     gap_value=ss.gap,
                     gap_threshold_used=ss.gap_threshold,
                     atr_regime=ss.vol_regime,
@@ -407,11 +397,33 @@ class BotEngine:
             )
             await self._audit_logger.log_skip(skip)
 
-    async def _handle_smart_hedge(self, slug: str) -> None:
-        """Execute Smart Hedge Strategy: Buy both sides ONLY if pair cost < threshold."""
-        from logs.audit_logger import TradeRecord
+    async def _execute_hedge_leg(self, slug: str, side: str, odds: float, mode: str):
+        """Execute one hedge leg and return (side, mode, order_result_or_none)."""
         from risk.gates import GateResult
-        
+
+        target_token_id = self._current_tokens.get(side)
+        if not target_token_id:
+            logger.error("Cannot execute %s: Missing token_id!", mode)
+            return side, mode, None
+
+        ss = self._signal_processor.state
+        gate_res = GateResult(
+            all_pass=True,
+            failed_gate=None,
+            fail_reason=None,
+            gate_statuses={i: True for i in range(1, 8)},
+            evaluated_at=time.time(),
+            signal_snapshot=ss,
+            target_ask=odds,
+            expected_odds=odds,
+            in_sweet_spot=True,
+            side=side,
+        )
+        order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
+        return side, mode, order_res
+
+    async def _handle_smart_hedge(self, slug: str) -> None:
+        """Execute Smart Hedge Strategy with concurrent UP/DOWN hedging."""
         t_rem = get_time_remaining()
         in_window = self._cfg.GOLDEN_WINDOW_END <= t_rem <= self._cfg.GOLDEN_WINDOW_START
         if not in_window:
@@ -425,12 +437,12 @@ class BotEngine:
         down_odds = latest_odds.down_odds
         pair_cost = up_odds + down_odds
 
-        # CRITICAL FIX: PAIR COST CONTROL
         if pair_cost >= self._cfg.SMART_HEDGE_PAIR_MAX:
             from logs.audit_logger import SkipRecord
+
             reason = f"SMART_HEDGE_SKIP: pair cost ${pair_cost:.2f} >= max ${self._cfg.SMART_HEDGE_PAIR_MAX:.2f}"
-            logger.info("🛡️ %s", reason)
-            
+            logger.info("SMART HEDGE SKIP: %s", reason)
+
             skip = SkipRecord(
                 session_id=self._session_id,
                 window_id=slug,
@@ -452,71 +464,56 @@ class BotEngine:
                 slippage_gate_pass=True,
                 t_remaining_sec=t_rem,
                 would_have_won=None,
-                chainlink_age_sec=0
+                chainlink_age_sec=0,
             )
             await self._audit_logger.log_skip(skip)
             return
-        
-        # Beli UP
+
         latest_book = self._signal_processor.latest_book
         if not latest_book:
             return
 
+        tasks = []
         if not self._order_sent_up:
-            # BUG 1 FIXED: Indentasi diperbaiki, seluruh eksekusi masuk ke dalam if depth
-            # KONDISI 1: Harga valid (Best Ask)
-            # KONDISI 2: Depth cukup
             if up_odds <= self._cfg.ODDS_MAX and latest_book.up_ask_depth_usdc >= self._cfg.HEDGE_MIN_DEPTH_USDC:
-                logger.info("🛡️ SMART HEDGE UP: odds %.3f (depth $%.2f)", up_odds, latest_book.up_ask_depth_usdc)
-                ss = self._signal_processor.state
-                gate_res = GateResult(
-                    all_pass=True, failed_gate=None, fail_reason=None, gate_statuses={i: True for i in range(1, 8)},
-                    evaluated_at=time.time(), signal_snapshot=ss, target_ask=up_odds, expected_odds=up_odds,
-                    in_sweet_spot=True, side="UP"
-                )
-                target_token_id = self._current_tokens.get("UP")
-                if target_token_id:
-                    order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
-                    if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
-                        self._order_sent_up = True
-                        await self._log_hedge_trade(slug, order_res, "HEDGE_UP")
-                else:
-                    logger.error("Cannot execute SMART HEDGE UP: Missing token_id!")
+                logger.info("SMART HEDGE UP: odds %.3f (depth $%.2f)", up_odds, latest_book.up_ask_depth_usdc)
+                tasks.append(asyncio.create_task(self._execute_hedge_leg(slug, "UP", up_odds, "HEDGE_UP")))
             elif up_odds > self._cfg.ODDS_MAX:
-                logger.debug("🛡️ SMART HEDGE UP SKIP: Odds %.3f > %.3f", up_odds, self._cfg.ODDS_MAX)
+                logger.debug("SMART HEDGE UP SKIP: Odds %.3f > %.3f", up_odds, self._cfg.ODDS_MAX)
             else:
-                logger.debug("🛡️ SMART HEDGE UP SKIP: Depth $%.2f < $%.2f", latest_book.up_ask_depth_usdc, self._cfg.HEDGE_MIN_DEPTH_USDC)
-        
-        # Beli DOWN
+                logger.debug("SMART HEDGE UP SKIP: Depth $%.2f < $%.2f", latest_book.up_ask_depth_usdc, self._cfg.HEDGE_MIN_DEPTH_USDC)
+
         if not self._order_sent_down:
-            # BUG 1 FIXED: Indentasi diperbaiki, seluruh eksekusi masuk ke dalam if depth
-            # KONDISI 1: Harga valid (Best Ask)
-            # KONDISI 2: Depth cukup
             if down_odds <= self._cfg.ODDS_MAX and latest_book.down_ask_depth_usdc >= self._cfg.HEDGE_MIN_DEPTH_USDC:
-                logger.info("🛡️ SMART HEDGE DOWN: odds %.3f (depth $%.2f)", down_odds, latest_book.down_ask_depth_usdc)
-                ss = self._signal_processor.state
-                gate_res = GateResult(
-                    all_pass=True, failed_gate=None, fail_reason=None, gate_statuses={i: True for i in range(1, 8)},
-                    evaluated_at=time.time(), signal_snapshot=ss, target_ask=down_odds, expected_odds=down_odds,
-                    in_sweet_spot=True, side="DOWN"
-                )
-                target_token_id = self._current_tokens.get("DOWN")
-                if target_token_id:
-                    order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
-                    if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
-                        self._order_sent_down = True
-                        await self._log_hedge_trade(slug, order_res, "HEDGE_DOWN")
-                else:
-                    logger.error("Cannot execute HEDGE DOWN: Missing token_id!")
+                logger.info("SMART HEDGE DOWN: odds %.3f (depth $%.2f)", down_odds, latest_book.down_ask_depth_usdc)
+                tasks.append(asyncio.create_task(self._execute_hedge_leg(slug, "DOWN", down_odds, "HEDGE_DOWN")))
             elif down_odds > self._cfg.ODDS_MAX:
-                logger.debug("🛡️ SMART HEDGE DOWN SKIP: Odds %.3f > %.3f", down_odds, self._cfg.ODDS_MAX)
+                logger.debug("SMART HEDGE DOWN SKIP: Odds %.3f > %.3f", down_odds, self._cfg.ODDS_MAX)
             else:
-                logger.debug("🛡️ SMART HEDGE DOWN SKIP: Depth $%.2f < $%.2f", latest_book.down_ask_depth_usdc, self._cfg.HEDGE_MIN_DEPTH_USDC)
+                logger.debug("SMART HEDGE DOWN SKIP: Depth $%.2f < $%.2f", latest_book.down_ask_depth_usdc, self._cfg.HEDGE_MIN_DEPTH_USDC)
+
+        if not tasks:
+            return
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error("SMART HEDGE execution error: %s", result)
+                continue
+
+            side, mode, order_res = result
+            if not order_res:
+                continue
+
+            if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
+                if side == "UP":
+                    self._order_sent_up = True
+                elif side == "DOWN":
+                    self._order_sent_down = True
+                await self._log_hedge_trade(slug, order_res, mode)
 
     async def _handle_temporal_hedge(self, slug: str) -> None:
-        """Execute Temporal Hedge Strategy: Buy cheapest side, track cost, buy other side later if total < max cost."""
-        from risk.gates import GateResult
-        
+        """Execute Temporal Hedge Strategy with concurrent eligible leg execution."""
         t_rem = get_time_remaining()
         in_window = self._cfg.GOLDEN_WINDOW_END <= t_rem <= self._cfg.GOLDEN_WINDOW_START
         if not in_window:
@@ -526,70 +523,102 @@ class BotEngine:
         if not latest_odds:
             return
 
-        up_odds = latest_odds.up_odds
-        down_odds = latest_odds.down_odds
         latest_book = self._signal_processor.latest_book
         if not latest_book:
             return
-        
-        # Track cumulative cost of hedge positions in this window
+
+        up_odds = latest_odds.up_odds
+        down_odds = latest_odds.down_odds
+
         if not hasattr(self, "_temporal_hedge_cost"):
             self._temporal_hedge_cost = 0.0
 
-        # Reset cumulative cost if new window
         if not hasattr(self, "_current_slug") or self._current_slug != slug:
             self._temporal_hedge_cost = 0.0
             self._current_slug = slug
 
-        # Try UP
-        if not self._order_sent_up and up_odds <= self._cfg.TEMPORAL_MAX_SINGLE_ODDS:
-            if latest_book.up_ask_depth_usdc < self._cfg.HEDGE_MIN_DEPTH_USDC:
-                logger.debug("⏳ TEMPORAL UP SKIP: Depth $%.2f < $%.2f", latest_book.up_ask_depth_usdc, self._cfg.HEDGE_MIN_DEPTH_USDC)
-            elif self._temporal_hedge_cost + up_odds <= self._cfg.TEMPORAL_MAX_TOTAL_COST:
-                logger.info("⏳ TEMPORAL UP: odds %.3f (depth $%.2f). Total cost will be %.3f <= %.3f", 
-                            up_odds, latest_book.up_ask_depth_usdc, self._temporal_hedge_cost + up_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
-                ss = self._signal_processor.state
-                gate_res = GateResult(
-                    all_pass=True, failed_gate=None, fail_reason=None, gate_statuses={i: True for i in range(1, 8)},
-                    evaluated_at=time.time(), signal_snapshot=ss, target_ask=up_odds, expected_odds=up_odds,
-                    in_sweet_spot=True, side="UP"
-                )
-                target_token_id = self._current_tokens.get("UP")
-                if not target_token_id:
-                    logger.error("Cannot execute TEMPORAL HEDGE UP: Missing token_id!")
-                    return
-                order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
-                if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
-                    self._order_sent_up = True
-                    self._temporal_hedge_cost += (order_res.entry_odds or up_odds)
-                    await self._log_hedge_trade(slug, order_res, "TEMPORAL_UP")
-            else:
-                logger.debug("⏳ TEMPORAL UP SKIP: Cost %.3f + %.3f > %.3f", self._temporal_hedge_cost, up_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
+        eligible_up = (
+            not self._order_sent_up
+            and up_odds <= self._cfg.TEMPORAL_MAX_SINGLE_ODDS
+            and latest_book.up_ask_depth_usdc >= self._cfg.HEDGE_MIN_DEPTH_USDC
+            and self._temporal_hedge_cost + up_odds <= self._cfg.TEMPORAL_MAX_TOTAL_COST
+        )
+        eligible_down = (
+            not self._order_sent_down
+            and down_odds <= self._cfg.TEMPORAL_MAX_SINGLE_ODDS
+            and latest_book.down_ask_depth_usdc >= self._cfg.HEDGE_MIN_DEPTH_USDC
+            and self._temporal_hedge_cost + down_odds <= self._cfg.TEMPORAL_MAX_TOTAL_COST
+        )
 
-        # Try DOWN
-        if not self._order_sent_down and down_odds <= self._cfg.TEMPORAL_MAX_SINGLE_ODDS:
-            if latest_book.down_ask_depth_usdc < self._cfg.HEDGE_MIN_DEPTH_USDC:
-                logger.debug("⏳ TEMPORAL DOWN SKIP: Depth $%.2f < $%.2f", latest_book.down_ask_depth_usdc, self._cfg.HEDGE_MIN_DEPTH_USDC)
-            elif self._temporal_hedge_cost + down_odds <= self._cfg.TEMPORAL_MAX_TOTAL_COST:
-                logger.info("⏳ TEMPORAL DOWN: odds %.3f (depth $%.2f). Total cost will be %.3f <= %.3f", 
-                            down_odds, latest_book.down_ask_depth_usdc, self._temporal_hedge_cost + down_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
-                ss = self._signal_processor.state
-                gate_res = GateResult(
-                    all_pass=True, failed_gate=None, fail_reason=None, gate_statuses={i: True for i in range(1, 8)},
-                    evaluated_at=time.time(), signal_snapshot=ss, target_ask=down_odds, expected_odds=down_odds,
-                    in_sweet_spot=True, side="DOWN"
-                )
-                target_token_id = self._current_tokens.get("DOWN")
-                if not target_token_id:
-                    logger.error("Cannot execute TEMPORAL HEDGE DOWN: Missing token_id!")
-                    return
-                order_res = await self._order_executor.execute(gate_res, target_token_id, slug)
-                if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
-                    self._order_sent_down = True
-                    self._temporal_hedge_cost += (order_res.entry_odds or down_odds)
-                    await self._log_hedge_trade(slug, order_res, "TEMPORAL_DOWN")
+        if not eligible_up:
+            if not self._order_sent_up and up_odds > self._cfg.TEMPORAL_MAX_SINGLE_ODDS:
+                logger.debug("TEMPORAL UP SKIP: Odds %.3f > %.3f", up_odds, self._cfg.TEMPORAL_MAX_SINGLE_ODDS)
+            elif not self._order_sent_up and latest_book.up_ask_depth_usdc < self._cfg.HEDGE_MIN_DEPTH_USDC:
+                logger.debug("TEMPORAL UP SKIP: Depth $%.2f < $%.2f", latest_book.up_ask_depth_usdc, self._cfg.HEDGE_MIN_DEPTH_USDC)
+            elif not self._order_sent_up:
+                logger.debug("TEMPORAL UP SKIP: Cost %.3f + %.3f > %.3f", self._temporal_hedge_cost, up_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
+        else:
+            logger.info(
+                "TEMPORAL UP: odds %.3f (depth $%.2f). Total cost cap %.3f",
+                up_odds,
+                latest_book.up_ask_depth_usdc,
+                self._cfg.TEMPORAL_MAX_TOTAL_COST,
+            )
+
+        if not eligible_down:
+            if not self._order_sent_down and down_odds > self._cfg.TEMPORAL_MAX_SINGLE_ODDS:
+                logger.debug("TEMPORAL DOWN SKIP: Odds %.3f > %.3f", down_odds, self._cfg.TEMPORAL_MAX_SINGLE_ODDS)
+            elif not self._order_sent_down and latest_book.down_ask_depth_usdc < self._cfg.HEDGE_MIN_DEPTH_USDC:
+                logger.debug("TEMPORAL DOWN SKIP: Depth $%.2f < $%.2f", latest_book.down_ask_depth_usdc, self._cfg.HEDGE_MIN_DEPTH_USDC)
+            elif not self._order_sent_down:
+                logger.debug("TEMPORAL DOWN SKIP: Cost %.3f + %.3f > %.3f", self._temporal_hedge_cost, down_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
+        else:
+            logger.info(
+                "TEMPORAL DOWN: odds %.3f (depth $%.2f). Total cost cap %.3f",
+                down_odds,
+                latest_book.down_ask_depth_usdc,
+                self._cfg.TEMPORAL_MAX_TOTAL_COST,
+            )
+
+        if eligible_up and eligible_down and (self._temporal_hedge_cost + up_odds + down_odds > self._cfg.TEMPORAL_MAX_TOTAL_COST):
+            logger.debug(
+                "TEMPORAL dual-leg skipped for cap: %.3f + %.3f + %.3f > %.3f",
+                self._temporal_hedge_cost,
+                up_odds,
+                down_odds,
+                self._cfg.TEMPORAL_MAX_TOTAL_COST,
+            )
+            if up_odds <= down_odds:
+                eligible_down = False
             else:
-                logger.debug("⏳ TEMPORAL DOWN SKIP: Cost %.3f + %.3f > %.3f", self._temporal_hedge_cost, down_odds, self._cfg.TEMPORAL_MAX_TOTAL_COST)
+                eligible_up = False
+
+        tasks = []
+        if eligible_up:
+            tasks.append(asyncio.create_task(self._execute_hedge_leg(slug, "UP", up_odds, "TEMPORAL_UP")))
+        if eligible_down:
+            tasks.append(asyncio.create_task(self._execute_hedge_leg(slug, "DOWN", down_odds, "TEMPORAL_DOWN")))
+
+        if not tasks:
+            return
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error("TEMPORAL HEDGE execution error: %s", result)
+                continue
+
+            side, mode, order_res = result
+            if not order_res:
+                continue
+
+            if order_res.status in ("FILLED", "PARTIAL", "PAPER_FILL"):
+                if side == "UP":
+                    self._order_sent_up = True
+                elif side == "DOWN":
+                    self._order_sent_down = True
+                self._temporal_hedge_cost += (order_res.entry_odds or (up_odds if side == "UP" else down_odds))
+                await self._log_hedge_trade(slug, order_res, mode)
 
     async def _log_hedge_trade(self, slug: str, order_res, mode: str) -> None:
         """Helper to log hedge trades and update dashboard."""
@@ -602,7 +631,7 @@ class BotEngine:
             timestamp_trigger=datetime.now(timezone.utc).isoformat(),
             timestamp_order_sent=datetime.now(timezone.utc).isoformat(),
             timestamp_confirmed=datetime.now(timezone.utc).isoformat(),
-            side=order_res.side or "", strike_price=order_res.entry_odds or 0.0,
+            side=order_res.side or "", strike_price=ss.strike_price,
             hl_price_at_trigger=ss.current_hl_price, gap_value=ss.gap,
             gap_threshold_used=ss.gap_threshold, atr_regime=ss.vol_regime,
             cvd_60s=ss.cvd_60s, cvd_threshold_used=ss.cvd_threshold,

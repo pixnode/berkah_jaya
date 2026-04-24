@@ -51,6 +51,19 @@ class ChainlinkFeed:
         self._consecutive_failures: int = 0
         self._queue: Optional[asyncio.Queue] = None
         self._session: Optional[aiohttp.ClientSession] = None
+        self._rpc_headers = {"Content-Type": "application/json"}
+        self._rpc_payload = {
+            "jsonrpc": "2.0",
+            "method": "eth_call",
+            "params": [
+                {
+                    "to": self._cfg.CHAINLINK_CONTRACT_ADDRESS,
+                    "data": LATEST_ROUND_DATA_SELECTOR,
+                },
+                "latest",
+            ],
+            "id": 1,
+        }
 
     @property
     def last_event(self) -> Optional[ChainlinkEvent]:
@@ -132,39 +145,14 @@ class ChainlinkFeed:
                 timeout=aiohttp.ClientTimeout(total=10),
             )
 
-        payload = {
-            "jsonrpc": "2.0",
-            "method": "eth_call",
-            "params": [
-                {
-                    "to": self._cfg.CHAINLINK_CONTRACT_ADDRESS,
-                    "data": LATEST_ROUND_DATA_SELECTOR,
-                },
-                "latest",
-            ],
-            "id": 1,
-        }
-
         for attempt in range(3):
             try:
-                async with self._session.post(
-                    self._cfg.POLYGON_RPC_URL,
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
-                ) as resp:
-                    if resp.status != 200:
-                        logger.warning("Chainlink RPC HTTP %d (attempt %d/3)", resp.status, attempt + 1)
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-
-                    result = await resp.json()
-                    if "error" in result:
-                        logger.warning("Chainlink RPC error: %s (attempt %d/3)", result["error"], attempt + 1)
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-
-                    hex_data = result.get("result", "")
-                    return self._parse_round_data(hex_data)
+                rpc_result = await asyncio.wait_for(self._eth_call(), timeout=2.0)
+                if rpc_result is None:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                hex_data = rpc_result.get("result", "")
+                return self._parse_round_data(hex_data)
 
             except asyncio.TimeoutError:
                 logger.warning("CHAINLINK_RPC_TIMEOUT (attempt %d/3)", attempt + 1)
@@ -179,6 +167,27 @@ class ChainlinkFeed:
                 if attempt < 2: await asyncio.sleep(2 ** attempt)
 
         return None
+
+    async def _eth_call(self) -> Optional[dict]:
+        """Run a single eth_call using the shared session and payload."""
+        if self._session is None or self._session.closed:
+            return None
+
+        async with self._session.post(
+            self._cfg.POLYGON_RPC_URL,
+            json=self._rpc_payload,
+            headers=self._rpc_headers,
+        ) as resp:
+            if resp.status != 200:
+                logger.warning("Chainlink RPC HTTP %d", resp.status)
+                return None
+
+            result = await resp.json()
+            if "error" in result:
+                logger.warning("Chainlink RPC error: %s", result["error"])
+                return None
+
+            return result
 
     def _parse_round_data(self, hex_data: str) -> Optional[ChainlinkEvent]:
         """Parse the hex response from latestRoundData() into a ChainlinkEvent."""

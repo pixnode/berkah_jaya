@@ -37,6 +37,25 @@ class PolymarketFeed:
         self._current_slug: Optional[str] = None
         self._up_depth_usdc: float = 0.0
         self._down_depth_usdc: float = 0.0
+        self._up_ask: float = 0.0
+        self._up_bid: float = 0.0
+        self._down_ask: float = 0.0
+        self._down_bid: float = 0.0
+        self._up_token_id: str = ""
+        self._down_token_id: str = ""
+        self._last_unknown_log: float = 0.0
+
+    def _normalize_token_id(self, token_id: str) -> str:
+        """Normalize token IDs so hex and decimal forms can be matched consistently."""
+        raw = str(token_id).strip()
+        if not raw:
+            return ""
+        if raw.lower().startswith("0x"):
+            try:
+                return str(int(raw, 16))
+            except ValueError:
+                return raw
+        return raw
 
     @property
     def is_connected(self) -> bool:
@@ -85,8 +104,8 @@ class PolymarketFeed:
 
     def set_active_tokens(self, up_id: str, down_id: str) -> None:
         """Inject active Token IDs from the engine to avoid redundant API calls."""
-        self._up_token_id = str(up_id).strip()
-        self._down_token_id = str(down_id).strip()
+        self._up_token_id = self._normalize_token_id(up_id)
+        self._down_token_id = self._normalize_token_id(down_id)
         logger.info("PolymarketFeed: Active tokens injected (UP: %s, DOWN: %s)", up_id, down_id)
 
     async def start(self, queue: asyncio.Queue) -> None:
@@ -267,14 +286,8 @@ class PolymarketFeed:
     async def _handle_book_update(self, data: dict) -> None:
         """Parse order book update and emit OrderBookEvent."""
         try:
-            market = data.get("market", data.get("asset_id", ""))
             bids = data.get("bids", [])
             asks = data.get("asks", [])
-
-            up_ask = 0.0
-            up_bid = 0.0
-            down_ask = 0.0
-            down_bid = 0.0
 
             raw_ask = 0.0
             raw_bid = 0.0
@@ -292,33 +305,22 @@ class PolymarketFeed:
             if bids:
                 raw_bid = float(bids[0].get("price", bids[0].get("px", 0)))
                 
-            # Flexible ID identification
-            asset_id = str(data.get("market", data.get("asset_id", ""))).strip()
-            up_id = str(getattr(self, "_up_token_id", "")).strip()
-            down_id = str(getattr(self, "_down_token_id", "")).strip()
+            # Prioritaskan asset_id agar tidak keliru mengambil string slug
+            asset_id = self._normalize_token_id(data.get("asset_id", data.get("market", "")))
+            up_id = self._normalize_token_id(getattr(self, "_up_token_id", ""))
+            down_id = self._normalize_token_id(getattr(self, "_down_token_id", ""))
+
+            if not asset_id:
+                return
 
             # If IDs are not set, we try to guess based on order of arrival (fallback)
             if not up_id and not down_id:
-                # No IDs injected yet, but we got a message? Use it.
                 self._up_token_id = asset_id
                 up_id = asset_id
                 logger.info("PolymarketFeed: Auto-assigned unknown ID to UP slot: %s", asset_id)
 
-            if asset_id == down_id:
-                self._down_depth_usdc = current_depth
-                down_ask = raw_ask
-                down_bid = raw_bid
-                up_bid = round(1.0 - down_ask, 4) if down_ask > 0 else 0.0
-                up_ask = round(1.0 - down_bid, 4) if down_bid > 0 else 0.0
-            elif asset_id == up_id:
-                self._up_depth_usdc = current_depth
-                up_ask = raw_ask
-                up_bid = raw_bid
-                down_bid = round(1.0 - up_ask, 4) if up_ask > 0 else 0.0
-                down_ask = round(1.0 - up_bid, 4) if up_bid > 0 else 0.0
-            else:
-                # If we have IDs but this one doesn't match, maybe it's the OTHER one we missed?
-                # Let's be aggressive: if we only have UP and this is different, assume it's DOWN.
+            # If one side is known and the other is missing, bind this unseen ID to the missing side.
+            if asset_id != up_id and asset_id != down_id:
                 if up_id and not down_id:
                     self._down_token_id = asset_id
                     down_id = asset_id
@@ -328,15 +330,42 @@ class PolymarketFeed:
                     up_id = asset_id
                     logger.info("PolymarketFeed: Auto-assigned unknown ID to UP slot: %s", asset_id)
                 else:
-                    # Diagnostics: log mismatch
                     now = time.time()
-                    if not hasattr(self, "_last_unknown_log"): self._last_unknown_log = 0
                     if now - self._last_unknown_log > 10:
                         self._last_unknown_log = now
-                        logger.info("Polymarket: Asset ID mismatch. Received: %s | Expected UP: %s, DOWN: %s", asset_id, up_id, down_id)
+                        logger.info(
+                            "Polymarket: Asset ID mismatch. Received: %s | Expected UP: %s, DOWN: %s",
+                            asset_id,
+                            up_id,
+                            down_id,
+                        )
                     return
 
-            mid = (up_ask + up_bid) / 2.0 if (up_ask > 0 and up_bid > 0) else 1.0
+            if asset_id == up_id:
+                if raw_ask > 0:
+                    self._up_ask = raw_ask
+                if raw_bid > 0:
+                    self._up_bid = raw_bid
+                self._up_depth_usdc = current_depth
+            elif asset_id == down_id:
+                if raw_ask > 0:
+                    self._down_ask = raw_ask
+                if raw_bid > 0:
+                    self._down_bid = raw_bid
+                self._down_depth_usdc = current_depth
+            else:
+                return
+
+            # Emit only when both real-side asks are known to avoid phantom odds values.
+            if self._up_ask <= 0 or self._down_ask <= 0:
+                return
+
+            up_ask = self._up_ask
+            up_bid = self._up_bid
+            down_ask = self._down_ask
+            down_bid = self._down_bid
+
+            mid = (up_ask + up_bid) / 2.0 if (up_ask > 0 and up_bid > 0) else 0.0
             spread_pct = ((up_ask - up_bid) / mid * 100.0) if mid > 0 else 0.0
 
             now = time.time()

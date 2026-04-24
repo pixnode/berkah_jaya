@@ -157,7 +157,7 @@ class ClaimManager:
 
         won, price = await self._wait_for_resolution(window_id)
         if not won:
-            return ClaimResult("LOSS", window_id, 0.0, price, "N-A", None, 0, False)
+            return ClaimResult("LOSS", window_id, 0.0, "N-A", None, 0, False, resolution_price=price)
 
         payout = order_result.shares_bought or 0.0
         self._unclaimed_balance += payout
@@ -176,7 +176,7 @@ class ClaimManager:
                         self._unclaimed_since = 0.0
                     logger.info("Auto-claim successful for %s (attempt %d)", window_id, attempt + 1)
                     await self._log_event("CLAIM_SUCCESS", window_id, f"Auto-claimed ${payout:.4f}")
-                    return ClaimResult("AUTO", window_id, payout, price, "AUTO", time.time(), attempt, False)
+                    return ClaimResult("AUTO", window_id, payout, "AUTO", time.time(), attempt, False, resolution_price=price)
             except Exception as exc:
                 logger.warning("Claim retry %d/%d error for %s: %s", attempt + 1, max_retries, window_id, exc)
 
@@ -209,7 +209,7 @@ class ClaimManager:
         logger.info("[PAPER] Hasil %s: %s | Payout: $%.2f | Cost: $%.2f", 
                     window_id, "WIN" if won else "LOSS", payout, order_result.cost_usd)
         
-        return ClaimResult(status, window_id, payout, price, "PAPER", time.time(), 0, True)
+        return ClaimResult(status, window_id, payout, "PAPER", time.time(), 0, True, resolution_price=price)
 
     async def _wait_for_resolution(self, window_id: str) -> tuple[bool, float]:
         """Poll for on-chain resolution. Returns (won, price)."""
